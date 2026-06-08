@@ -1,0 +1,46 @@
+inputs:
+  - name: ac_power
+    directory: /media/operadorua/ALMACENAMIENTO/ATAMOSTEC2/Data/CDAQ2/Power
+    mode: latest
+    timestamp_column: TimeStamp
+    delimiter: ";"
+    decimal_comma: true
+    include:
+      - "*_ACpower.txt"
+    storage:
+      outputs:
+        - name: local_timescale
+          type: timescaledb
+          enabled: true
+          timescaledb:
+            host_env: TIMESCALE_HOST_LOCAL
+            port_env: TIMESCALE_PORT_LOCAL
+            user_env: TIMESCALE_USER_LOCAL
+            password_env: TIMESCALE_PASSWORD_LOCAL
+            database_env: TIMESCALE_DB_LOCAL
+            schema: ua
+            table: cdaq2_ac_power
+            sslmode: disable
+
+  - name: dc_power
+    directory: /media/operadorua/ALMACENAMIENTO/ATAMOSTEC2/Data/CDAQ2/Power
+    mode: latest
+    timestamp_column: TimeStamp
+    delimiter: ";"
+    decimal_comma: true
+    include:
+      - "*_DCpower.txt"
+    storage:
+      outputs:
+        - name: local_timescale
+          type: timescaledb
+          enabled: true
+          timescaledb:
+            host_env: TIMESCALE_HOST_LOCAL
+            port_env: TIMESCALE_PORT_LOCAL
+            user_env: TIMESCALE_USER_LOCAL
+            password_env: TIMESCALE_PASSWORD_LOCAL
+            database_env: TIMESCALE_DB_LOCAL
+            schema: ua
+            table: cdaq2_dc_power
+            sslmode: disable

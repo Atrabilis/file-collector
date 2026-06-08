@@ -1,0 +1,206 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadValidConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+content := `
+inputs:
+  - name: ac_power
+    directory: /tmp/power
+    mode: latest
+    timestamp_column: TimeStamp
+    delimiter: ";"
+    decimal_comma: true
+    include:
+      - "*_ACpower.txt"
+    storage:
+      outputs:
+        - name: local_timescale
+          type: timescaledb
+          enabled: true
+          timescaledb:
+            host_env: TIMESCALE_HOST_LOCAL
+            port_env: TIMESCALE_PORT_LOCAL
+            user_env: TIMESCALE_USER_LOCAL
+            password_env: TIMESCALE_PASSWORD_LOCAL
+            database_env: TIMESCALE_DB_LOCAL
+            schema: ua
+            table: cdaq2_ac_power
+`
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got := len(cfg.Inputs); got != 1 {
+		t.Fatalf("len(Inputs) = %d, want 1", got)
+	}
+	if cfg.Inputs[0].Name != "ac_power" {
+		t.Fatalf("Inputs[0].Name = %q, want %q", cfg.Inputs[0].Name, "ac_power")
+	}
+	if cfg.Inputs[0].TimestampColumn != "TimeStamp" {
+		t.Fatalf("Inputs[0].TimestampColumn = %q, want %q", cfg.Inputs[0].TimestampColumn, "TimeStamp")
+	}
+	if cfg.Inputs[0].Mode != "latest" {
+		t.Fatalf("Inputs[0].Mode = %q, want %q", cfg.Inputs[0].Mode, "latest")
+	}
+	if cfg.Inputs[0].Delimiter != ";" {
+		t.Fatalf("Inputs[0].Delimiter = %q, want %q", cfg.Inputs[0].Delimiter, ";")
+	}
+	if !cfg.Inputs[0].DecimalComma {
+		t.Fatalf("Inputs[0].DecimalComma = false, want true")
+	}
+	if got := len(cfg.Inputs[0].Storage.Outputs); got != 1 {
+		t.Fatalf("len(Storage.Outputs) = %d, want 1", got)
+	}
+	if cfg.Inputs[0].Storage.Outputs[0].Type != "timescaledb" {
+		t.Fatalf("Storage.Outputs[0].Type = %q, want %q", cfg.Inputs[0].Storage.Outputs[0].Type, "timescaledb")
+	}
+}
+
+func TestValidateRejectsMissingInclude(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:      "ac_power",
+				Directory: "/tmp/power",
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateRejectsUnsupportedColumnType(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:      "ac_power",
+				Directory: "/tmp/power",
+				Include:   []string{"*_ACpower.txt"},
+				Columns: map[string]ColumnConfig{
+					"TimeStamp": {Type: "datetime64"},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateRejectsMissingTimestampColumn(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:      "ac_power",
+				Directory: "/tmp/power",
+				Include:   []string{"*_ACpower.txt"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateDefaultsModeToAll(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "ac_power",
+				Directory:       "/tmp/power",
+				TimestampColumn: "TimeStamp",
+				Include:         []string{"*_ACpower.txt"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].Mode != "all" {
+		t.Fatalf("Mode = %q, want %q", cfg.Inputs[0].Mode, "all")
+	}
+}
+
+func TestValidateRejectsLastNFilesWithoutCount(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "ac_power",
+				Directory:       "/tmp/power",
+				Mode:            "last_n_files",
+				TimestampColumn: "TimeStamp",
+				Include:         []string{"*_ACpower.txt"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateRejectsInvalidTimescaleOutput(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "ac_power",
+				Directory:       "/tmp/power",
+				TimestampColumn: "TimeStamp",
+				Include:         []string{"*_ACpower.txt"},
+				Storage: StorageConfig{
+					Outputs: []Output{
+						{
+							Name:    "local_timescale",
+							Type:    "timescaledb",
+							Enabled: true,
+							TimescaleDB: TimescaleDBOutputConfig{
+								Host:     "127.0.0.1",
+								Port:     5432,
+								User:     "collector",
+								Password: "secret",
+								Database: "telemetry",
+								Schema:   "ua",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
