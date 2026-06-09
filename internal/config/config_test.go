@@ -11,7 +11,7 @@ func TestLoadValidConfig(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
-content := `
+	content := `
 inputs:
   - name: ac_power
     directory: /tmp/power
@@ -68,6 +68,9 @@ inputs:
 	}
 	if cfg.Inputs[0].Storage.Outputs[0].Type != "timescaledb" {
 		t.Fatalf("Storage.Outputs[0].Type = %q, want %q", cfg.Inputs[0].Storage.Outputs[0].Type, "timescaledb")
+	}
+	if cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize != 5000 {
+		t.Fatalf("Storage.Outputs[0].TimescaleDB.BatchSize = %d, want 5000", cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize)
 	}
 }
 
@@ -202,5 +205,47 @@ func TestValidateRejectsInvalidTimescaleOutput(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateAllowsCustomTimescaleBatchSize(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "ac_power",
+				Directory:       "/tmp/power",
+				TimestampColumn: "TimeStamp",
+				Include:         []string{"*_ACpower.txt"},
+				Storage: StorageConfig{
+					Outputs: []Output{
+						{
+							Name:    "local_timescale",
+							Type:    "timescaledb",
+							Enabled: true,
+							TimescaleDB: TimescaleDBOutputConfig{
+								Host:       "127.0.0.1",
+								Port:       5432,
+								User:       "collector",
+								Password:   "secret",
+								Database:   "telemetry",
+								Schema:     "ua",
+								Table:      "cdaq2_ac_power",
+								BatchSize:  250,
+								OnConflict: "do_nothing",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize != 250 {
+		t.Fatalf("BatchSize = %d, want 250", cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize)
 	}
 }

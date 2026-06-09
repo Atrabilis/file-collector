@@ -78,7 +78,7 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 		workerCount = len(files)
 	}
 
-type writeOutcome struct {
+	type writeOutcome struct {
 		filePath     string
 		rowsInserted int
 		elapsed      time.Duration
@@ -141,10 +141,6 @@ type writeOutcome struct {
 }
 
 func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, filePath string, opts tabular.TypedReadOptions, result *WriteResult) error {
-	var statement string
-	var err error
-	statementBuilt := false
-
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -152,6 +148,34 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 	defer func() {
 		_ = tx.Rollback()
 	}()
+
+	var batchColumns []string
+	var batchValues []any
+	batchRowCount := 0
+	batchLastLineNumber := 0
+
+	flushBatch := func() error {
+		if batchRowCount == 0 {
+			return nil
+		}
+
+		statement := buildInsertStatement(connCfg.Schema, connCfg.Table, batchColumns, batchRowCount, output.TimescaleDB.OnConflict)
+		execResult, err := tx.ExecContext(ctx, statement, batchValues...)
+		if err != nil {
+			return fmt.Errorf("exec insert batch ending at line %d: %w", batchLastLineNumber, err)
+		}
+		rowsAffected, err := execResult.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected for insert batch: %w", err)
+		}
+		result.RowsInserted += int(rowsAffected)
+
+		batchColumns = nil
+		batchValues = nil
+		batchRowCount = 0
+		batchLastLineNumber = 0
+		return nil
+	}
 
 	err = tabular.ForEachTypedRow(filePath, opts, func(row tabular.TypedRow) error {
 		tsValue, ok := row.Values[input.TimestampColumn]
@@ -169,23 +193,33 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			return err
 		}
 
-		if !statementBuilt {
-			statement = buildInsertStatement(connCfg.Schema, connCfg.Table, columns, output.TimescaleDB.OnConflict)
-			statementBuilt = true
+		if batchRowCount > 0 && !sameColumns(batchColumns, columns) {
+			if err := flushBatch(); err != nil {
+				return err
+			}
 		}
 
-		execResult, err := tx.ExecContext(ctx, statement, values...)
-		if err != nil {
-			return fmt.Errorf("exec insert at line %d: %w", row.LineNumber, err)
+		if batchRowCount == 0 {
+			batchColumns = append([]string(nil), columns...)
 		}
-		rowsAffected, err := execResult.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("rows affected at line %d: %w", row.LineNumber, err)
+
+		batchValues = append(batchValues, values...)
+		batchRowCount++
+		batchLastLineNumber = row.LineNumber
+
+		if batchRowCount >= output.TimescaleDB.BatchSize {
+			if err := flushBatch(); err != nil {
+				return err
+			}
 		}
-		result.RowsInserted += int(rowsAffected)
+
 		return nil
 	})
 	if err != nil {
+		return err
+	}
+
+	if err := flushBatch(); err != nil {
 		return err
 	}
 
@@ -228,19 +262,27 @@ func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRo
 	return columns, values, nil
 }
 
-func buildInsertStatement(schema, table string, columns []string, onConflict string) string {
+func buildInsertStatement(schema, table string, columns []string, rowCount int, onConflict string) string {
 	quotedColumns := make([]string, 0, len(columns))
-	placeholders := make([]string, 0, len(columns))
+	valueGroups := make([]string, 0, rowCount)
 	assignments := make([]string, 0, len(columns))
 
-	for idx, column := range columns {
+	for _, column := range columns {
 		quoted := identifier.QuoteIfNeeded(column)
 		quotedColumns = append(quotedColumns, quoted)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
 		if column == "ts" {
 			continue
 		}
 		assignments = append(assignments, fmt.Sprintf("%s = EXCLUDED.%s", quoted, quoted))
+	}
+
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		placeholders := make([]string, 0, len(columns))
+		for colIdx := range columns {
+			placeholderIdx := rowIdx*len(columns) + colIdx + 1
+			placeholders = append(placeholders, fmt.Sprintf("$%d", placeholderIdx))
+		}
+		valueGroups = append(valueGroups, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
 	}
 
 	conflictClause := `ON CONFLICT (ts) DO NOTHING`
@@ -249,13 +291,25 @@ func buildInsertStatement(schema, table string, columns []string, onConflict str
 	}
 
 	return fmt.Sprintf(
-		`INSERT INTO %s.%s (%s) VALUES (%s) %s`,
+		`INSERT INTO %s.%s (%s) VALUES %s %s`,
 		schema,
 		table,
 		strings.Join(quotedColumns, ", "),
-		strings.Join(placeholders, ", "),
+		strings.Join(valueGroups, ", "),
 		conflictClause,
 	)
+}
+
+func sameColumns(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if left[idx] != right[idx] {
+			return false
+		}
+	}
+	return true
 }
 
 func sortedKeys(values map[string]any) []string {

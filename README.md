@@ -45,6 +45,7 @@ inputs:
             schema: ua
             table: cdaq2_ac_power
             sslmode: disable
+            batch_size: 5000
 
   - name: dc_power
     directory: /media/operadorua/ALMACENAMIENTO/ATAMOSTEC2/Data/CDAQ2/Power
@@ -68,6 +69,7 @@ inputs:
             schema: ua
             table: cdaq2_dc_power
             sslmode: disable
+            batch_size: 5000
 ```
 
 `mode` soporta por ahora:
@@ -79,3 +81,8 @@ inputs:
 `storage.outputs` soporta por ahora:
 
 - `timescaledb`: destino PostgreSQL/TimescaleDB con valores directos o vía variables de entorno
+
+Opciones relevantes de `timescaledb`:
+
+- `on_conflict`: `do_update` o `do_nothing`
+- `batch_size`: cantidad de filas por `INSERT ... VALUES ... ON CONFLICT ...` antes de enviar el lote. Default: `5000`

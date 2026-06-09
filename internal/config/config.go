@@ -32,9 +32,9 @@ type StorageConfig struct {
 }
 
 type Output struct {
-	Name       string                `yaml:"name"`
-	Type       string                `yaml:"type"`
-	Enabled    bool                  `yaml:"enabled"`
+	Name        string                  `yaml:"name"`
+	Type        string                  `yaml:"type"`
+	Enabled     bool                    `yaml:"enabled"`
 	TimescaleDB TimescaleDBOutputConfig `yaml:"timescaledb"`
 }
 
@@ -53,6 +53,7 @@ type TimescaleDBOutputConfig struct {
 	Table       string `yaml:"table"`
 	SSLMode     string `yaml:"sslmode"`
 	OnConflict  string `yaml:"on_conflict"`
+	BatchSize   int    `yaml:"batch_size"`
 }
 
 type Config struct {
@@ -138,6 +139,10 @@ func (c *Config) Validate() error {
 				c.Inputs[idx].Storage.Outputs[outputIdx].TimescaleDB.OnConflict = "do_update"
 				output.TimescaleDB.OnConflict = "do_update"
 			}
+			if output.TimescaleDB.BatchSize <= 0 {
+				c.Inputs[idx].Storage.Outputs[outputIdx].TimescaleDB.BatchSize = 5000
+				output.TimescaleDB.BatchSize = 5000
+			}
 			if output.Type == "timescaledb" {
 				if err := validateTimescaleDBOutput(input.Name, output); err != nil {
 					return err
@@ -174,6 +179,9 @@ func validateTimescaleDBOutput(inputName string, output Output) error {
 	}
 	if !isSupportedOnConflict(cfg.OnConflict) {
 		return fmt.Errorf("input %q output %q timescaledb has unsupported on_conflict %q", inputName, output.Name, cfg.OnConflict)
+	}
+	if cfg.BatchSize <= 0 {
+		return fmt.Errorf("input %q output %q timescaledb requires batch_size > 0", inputName, output.Name)
 	}
 	return nil
 }

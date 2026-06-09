@@ -21,6 +21,7 @@ inputs:
             schema: ua
             table: cdaq2_ac_power
             sslmode: disable
+            batch_size: 5000
 
   - name: dc_power
     directory: /media/operadorua/ALMACENAMIENTO/ATAMOSTEC2/Data/CDAQ2/Power
@@ -44,3 +45,4 @@ inputs:
             schema: ua
             table: cdaq2_dc_power
             sslmode: disable
+            batch_size: 5000

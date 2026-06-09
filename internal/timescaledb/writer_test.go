@@ -19,10 +19,10 @@ func TestBuildInsertPayloadNormalizesColumns(t *testing.T) {
 		tabular.TypedRow{
 			LineNumber: 2,
 			Values: map[string]any{
-				"TimeStamp":  time.Date(2026, time.June, 4, 0, 0, 2, 0, time.UTC),
-				"2VE201(V)":  123.4,
-				"2PE201(W)":  456.7,
-				"THD_V1(%)":  7.8,
+				"TimeStamp": time.Date(2026, time.June, 4, 0, 0, 2, 0, time.UTC),
+				"2VE201(V)": 123.4,
+				"2PE201(W)": 456.7,
+				"THD_V1(%)": 7.8,
 			},
 		},
 		time.Date(2026, time.June, 4, 0, 0, 2, 0, time.UTC),
@@ -48,9 +48,9 @@ func TestBuildInsertStatementQuotesNumericIdentifiers(t *testing.T) {
 		"ts",
 		"source_file",
 		"2_ve_201_v",
-	}, "do_update")
+	}, 2, "do_update")
 
-	if !strings.Contains(stmt, `INSERT INTO ua.cdaq2_dc_power (ts, source_file, "2_ve_201_v")`) {
+	if !strings.Contains(stmt, `INSERT INTO ua.cdaq2_dc_power (ts, source_file, "2_ve_201_v") VALUES ($1, $2, $3), ($4, $5, $6)`) {
 		t.Fatalf("statement insert columns not quoted as expected: %s", stmt)
 	}
 	if !strings.Contains(stmt, `ON CONFLICT (ts) DO UPDATE SET source_file = EXCLUDED.source_file, "2_ve_201_v" = EXCLUDED."2_ve_201_v"`) {
@@ -65,9 +65,20 @@ func TestBuildInsertStatementDoNothing(t *testing.T) {
 		"ts",
 		"source_file",
 		"2_ve_201_v",
-	}, "do_nothing")
+	}, 1, "do_nothing")
 
 	if !strings.Contains(stmt, `ON CONFLICT (ts) DO NOTHING`) {
 		t.Fatalf("statement conflict clause not set to DO NOTHING: %s", stmt)
+	}
+}
+
+func TestSameColumns(t *testing.T) {
+	t.Parallel()
+
+	if !sameColumns([]string{"ts", "value"}, []string{"ts", "value"}) {
+		t.Fatalf("sameColumns() = false, want true")
+	}
+	if sameColumns([]string{"ts", "value"}, []string{"ts", "other"}) {
+		t.Fatalf("sameColumns() = true, want false")
 	}
 }
