@@ -82,3 +82,31 @@ func TestSameColumns(t *testing.T) {
 		t.Fatalf("sameColumns() = true, want false")
 	}
 }
+
+func TestEffectiveBatchSizeUsesConfiguredValueWhenSafe(t *testing.T) {
+	t.Parallel()
+
+	got := effectiveBatchSize(5000, 10)
+	if got != 5000 {
+		t.Fatalf("effectiveBatchSize() = %d, want 5000", got)
+	}
+}
+
+func TestEffectiveBatchSizeCapsByParameterLimit(t *testing.T) {
+	t.Parallel()
+
+	got := effectiveBatchSize(5000, 16)
+	want := 4095
+	if got != want {
+		t.Fatalf("effectiveBatchSize() = %d, want %d", got, want)
+	}
+}
+
+func TestEffectiveBatchSizeReturnsOneWhenColumnCountExceedsParameterLimit(t *testing.T) {
+	t.Parallel()
+
+	got := effectiveBatchSize(5000, maxPostgresParameters+10)
+	if got != 1 {
+		t.Fatalf("effectiveBatchSize() = %d, want 1", got)
+	}
+}

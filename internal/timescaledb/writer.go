@@ -22,6 +22,8 @@ type WriteResult struct {
 	RowsInserted int
 }
 
+const maxPostgresParameters = 65535
+
 func WriteInputFiles(ctx context.Context, input config.Input, output config.Output, files []string) (*WriteResult, error) {
 	connCfg, err := ResolveOutput(output)
 	if err != nil {
@@ -203,11 +205,16 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			batchColumns = append([]string(nil), columns...)
 		}
 
+		maxBatchRows := effectiveBatchSize(output.TimescaleDB.BatchSize, len(batchColumns))
+		if maxBatchRows <= 0 {
+			return fmt.Errorf("no valid batch size for %d columns", len(batchColumns))
+		}
+
 		batchValues = append(batchValues, values...)
 		batchRowCount++
 		batchLastLineNumber = row.LineNumber
 
-		if batchRowCount >= output.TimescaleDB.BatchSize {
+		if batchRowCount >= maxBatchRows {
 			if err := flushBatch(); err != nil {
 				return err
 			}
@@ -298,6 +305,21 @@ func buildInsertStatement(schema, table string, columns []string, rowCount int, 
 		strings.Join(valueGroups, ", "),
 		conflictClause,
 	)
+}
+
+func effectiveBatchSize(configuredBatchSize, columnsPerRow int) int {
+	if configuredBatchSize <= 0 || columnsPerRow <= 0 {
+		return 0
+	}
+
+	maxRowsByParameters := maxPostgresParameters / columnsPerRow
+	if maxRowsByParameters <= 0 {
+		return 1
+	}
+	if configuredBatchSize < maxRowsByParameters {
+		return configuredBatchSize
+	}
+	return maxRowsByParameters
 }
 
 func sameColumns(left, right []string) bool {

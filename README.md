@@ -85,4 +85,4 @@ inputs:
 Opciones relevantes de `timescaledb`:
 
 - `on_conflict`: `do_update` o `do_nothing`
-- `batch_size`: cantidad de filas por `INSERT ... VALUES ... ON CONFLICT ...` antes de enviar el lote. Default: `5000`
+- `batch_size`: techo de filas por `INSERT ... VALUES ... ON CONFLICT ...`. El collector lo reduce automaticamente si hace falta para no superar el limite de parametros de PostgreSQL. Default: `5000`
