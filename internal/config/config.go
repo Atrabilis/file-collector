@@ -15,6 +15,8 @@ type Input struct {
 	LastNFiles      int                     `yaml:"last_n_files"`
 	Concurrency     int                     `yaml:"concurrency"`
 	TimestampColumn string                  `yaml:"timestamp_column"`
+	TimestampSourceColumns []string         `yaml:"timestamp_source_columns"`
+	TimestampLayouts []string               `yaml:"timestamp_layouts"`
 	Delimiter       string                  `yaml:"delimiter"`
 	DecimalComma    bool                    `yaml:"decimal_comma"`
 	Include         []string                `yaml:"include"`
@@ -106,6 +108,14 @@ func (c *Config) Validate() error {
 		}
 		if strings.TrimSpace(input.TimestampColumn) == "" {
 			return fmt.Errorf("input %q has empty timestamp_column", input.Name)
+		}
+		for sourceIdx, sourceColumn := range input.TimestampSourceColumns {
+			if strings.TrimSpace(sourceColumn) == "" {
+				return fmt.Errorf("input %q has empty timestamp_source_columns[%d]", input.Name, sourceIdx)
+			}
+		}
+		if len(input.TimestampSourceColumns) > 0 && len(input.TimestampLayouts) == 0 {
+			return fmt.Errorf("input %q with timestamp_source_columns requires timestamp_layouts", input.Name)
 		}
 		if input.Delimiter != "" && len([]rune(input.Delimiter)) != 1 {
 			return fmt.Errorf("input %q delimiter must be a single character", input.Name)

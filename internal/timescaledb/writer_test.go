@@ -41,6 +41,37 @@ func TestBuildInsertPayloadNormalizesColumns(t *testing.T) {
 	}
 }
 
+func TestBuildInsertPayloadSkipsTimestampSourceColumns(t *testing.T) {
+	t.Parallel()
+
+	columns, _, err := buildInsertPayload(
+		config.Input{
+			TimestampColumn:        "ts",
+			TimestampSourceColumns: []string{"Date", "time"},
+		},
+		"/tmp/20191217HET1_fixed_1MD410.iud",
+		tabular.TypedRow{
+			LineNumber: 2,
+			Values: map[string]any{
+				"ts":   time.Date(2019, time.December, 17, 14, 22, 3, 0, time.UTC),
+				"Date": "17.12.2019",
+				"time": "14:22:03",
+				"Pmax": 272.21,
+			},
+		},
+		time.Date(2019, time.December, 17, 14, 22, 3, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("buildInsertPayload() error = %v", err)
+	}
+
+	gotCols := strings.Join(columns, ",")
+	wantCols := "ts,source_file,source_line_number,flags,pmax"
+	if gotCols != wantCols {
+		t.Fatalf("columns = %q, want %q", gotCols, wantCols)
+	}
+}
+
 func TestBuildInsertStatementQuotesNumericIdentifiers(t *testing.T) {
 	t.Parallel()
 

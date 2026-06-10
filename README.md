@@ -72,6 +72,24 @@ inputs:
             batch_size: 5000
 ```
 
+Para archivos que traen fecha y hora separadas, se puede construir el timestamp con:
+
+```yaml
+timestamp_column: ts
+timestamp_source_columns:
+  - Date
+  - time
+timestamp_layouts:
+  - "02.01.2006 15:04:05"
+```
+
+En ese caso el collector:
+
+- concatena las columnas fuente con espacio
+- parsea el timestamp usando `timestamp_layouts`
+- inserta `ts` como marca de tiempo
+- no persiste las columnas fuente del timestamp
+
 `mode` soporta por ahora:
 
 - `all`: procesa todos los archivos matcheados

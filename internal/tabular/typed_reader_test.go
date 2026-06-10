@@ -120,3 +120,37 @@ func TestReadTypedFileSummaryTracksParseErrorsForExplicitTypes(t *testing.T) {
 		t.Fatalf("ParseErrors[1].ColumnName = %q, want %q", summary.ParseErrors[1].ColumnName, "Value")
 	}
 }
+
+func TestReadTypedFileSummaryBuildsCombinedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.iud")
+	content := "Date\ttime\tPmax\n17.12.2019\t14:22:03\t272.21\n"
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	summary, err := ReadTypedFileSummary(path, 1, TypedReadOptions{
+		Delimiter:              '\t',
+		TimestampColumn:        "ts",
+		TimestampSourceColumns: []string{"Date", "time"},
+		TimestampLayouts:       []string{"02.01.2006 15:04:05"},
+		ColumnSpecs: map[string]ColumnSpec{
+			"Pmax": {Type: ColumnTypeFloat64},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReadTypedFileSummary() error = %v", err)
+	}
+
+	got, ok := summary.PreviewRows[0].Values["ts"].(time.Time)
+	if !ok {
+		t.Fatalf("ts should be time.Time, got %#v", summary.PreviewRows[0].Values["ts"])
+	}
+	want := time.Date(2019, time.December, 17, 14, 22, 3, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("ts = %s, want %s", got, want)
+	}
+}

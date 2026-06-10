@@ -130,6 +130,47 @@ func TestValidateRejectsMissingTimestampColumn(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsCombinedTimestampColumns(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:                   "het1fixed",
+				Directory:              "/tmp/pvstand",
+				TimestampColumn:        "ts",
+				TimestampSourceColumns: []string{"Date", "time"},
+				TimestampLayouts:       []string{"02.01.2006 15:04:05"},
+				Include:                []string{"*.iud"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsCombinedTimestampWithoutLayouts(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:                   "het1fixed",
+				Directory:              "/tmp/pvstand",
+				TimestampColumn:        "ts",
+				TimestampSourceColumns: []string{"Date", "time"},
+				Include:                []string{"*.iud"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
 func TestValidateDefaultsModeToAll(t *testing.T) {
 	t.Parallel()
 

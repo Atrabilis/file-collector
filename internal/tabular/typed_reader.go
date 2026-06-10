@@ -27,6 +27,7 @@ type TypedReadOptions struct {
 	Delimiter        rune
 	DecimalComma     bool
 	TimestampColumn  string
+	TimestampSourceColumns []string
 	ColumnSpecs      map[string]ColumnSpec
 	TimestampLayouts []string
 }
@@ -113,12 +114,36 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 			continue
 		}
 		values := make(map[string]any, len(header))
+		rawByColumn := make(map[string]string, len(header))
+		for idx, columnName := range header {
+			if idx < len(raw) {
+				rawByColumn[columnName] = raw[idx]
+			}
+		}
+		if len(opts.TimestampSourceColumns) > 0 {
+			value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts)
+			if err != nil {
+				typed.ParseErrorCount++
+				if len(typed.ParseErrors) < previewRows {
+					typed.ParseErrors = append(typed.ParseErrors, ParseError{
+						LineNumber:   lineNumber,
+						ColumnName:   opts.TimestampColumn,
+						ExpectedType: ColumnTypeTimestamp,
+						Raw:          joined,
+						Error:        err.Error(),
+					})
+				}
+				values[opts.TimestampColumn] = joined
+			} else {
+				values[opts.TimestampColumn] = value
+			}
+		}
 		for idx, columnName := range header {
 			if idx >= len(raw) {
 				continue
 			}
 
-			if columnName == opts.TimestampColumn {
+			if len(opts.TimestampSourceColumns) == 0 && columnName == opts.TimestampColumn {
 				value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts)
 				if err != nil {
 					typed.ParseErrorCount++
@@ -218,12 +243,26 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 		}
 
 		values := make(map[string]any, len(header))
+		rawByColumn := make(map[string]string, len(header))
+		for idx, columnName := range header {
+			if idx < len(raw) {
+				rawByColumn[columnName] = raw[idx]
+			}
+		}
+		if len(opts.TimestampSourceColumns) > 0 {
+			value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts)
+			if err != nil {
+				values[opts.TimestampColumn] = joined
+			} else {
+				values[opts.TimestampColumn] = value
+			}
+		}
 		for idx, columnName := range header {
 			if idx >= len(raw) {
 				continue
 			}
 
-			if columnName == opts.TimestampColumn {
+			if len(opts.TimestampSourceColumns) == 0 && columnName == opts.TimestampColumn {
 				value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts)
 				if err != nil {
 					values[columnName] = raw[idx]
@@ -308,6 +347,19 @@ func parseTimestampValue(value string, layouts []string) (time.Time, error) {
 		lastErr = err
 	}
 	return time.Time{}, lastErr
+}
+
+func parseCombinedTimestamp(rawByColumn map[string]string, sourceColumns, layouts []string) (time.Time, string, error) {
+	parts := make([]string, 0, len(sourceColumns))
+	for _, columnName := range sourceColumns {
+		parts = append(parts, strings.TrimSpace(rawByColumn[columnName]))
+	}
+	joined := strings.Join(parts, " ")
+	ts, err := parseTimestampValue(joined, layouts)
+	if err != nil {
+		return time.Time{}, joined, err
+	}
+	return ts, joined, nil
 }
 
 func parseFloatValue(value string, decimalComma bool) (float64, error) {

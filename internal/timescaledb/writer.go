@@ -46,10 +46,14 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 	}
 
 	opts := tabular.TypedReadOptions{
-		DecimalComma:     input.DecimalComma,
-		TimestampColumn:  input.TimestampColumn,
-		ColumnSpecs:      columnSpecs,
-		TimestampLayouts: []string{"2006_01_02 15:04:05", time.RFC3339},
+		DecimalComma:          input.DecimalComma,
+		TimestampColumn:       input.TimestampColumn,
+		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
+		ColumnSpecs:           columnSpecs,
+		TimestampLayouts:      []string{"2006_01_02 15:04:05", time.RFC3339},
+	}
+	if len(input.TimestampLayouts) > 0 {
+		opts.TimestampLayouts = append([]string(nil), input.TimestampLayouts...)
 	}
 	if input.Delimiter != "" {
 		opts.Delimiter = []rune(input.Delimiter)[0]
@@ -246,6 +250,9 @@ func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRo
 		if rawColumnName == input.TimestampColumn {
 			continue
 		}
+		if containsString(input.TimestampSourceColumns, rawColumnName) {
+			continue
+		}
 
 		normalized := identifier.NormalizeColumnName(rawColumnName)
 		if normalized == "" {
@@ -267,6 +274,15 @@ func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRo
 	}
 
 	return columns, values, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func buildInsertStatement(schema, table string, columns []string, rowCount int, onConflict string) string {
