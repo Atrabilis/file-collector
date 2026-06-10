@@ -36,6 +36,7 @@ func TestBuildInsertPayloadNormalizesColumns(t *testing.T) {
 			"2_ve_201_v":         {},
 			"thd_v_1_pct":        {},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildInsertPayload() error = %v", err)
@@ -77,6 +78,7 @@ func TestBuildInsertPayloadSkipsTimestampSourceColumns(t *testing.T) {
 			"flags":              {},
 			"pmax":               {},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildInsertPayload() error = %v", err)
@@ -111,6 +113,7 @@ func TestBuildInsertPayloadSkipsColumnsMissingFromDestination(t *testing.T) {
 			"flags":              {},
 			"015_2017":           {},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildInsertPayload() error = %v", err)
@@ -125,6 +128,11 @@ func TestBuildInsertPayloadSkipsColumnsMissingFromDestination(t *testing.T) {
 
 func TestBuildInsertPayloadConvertsNaNToNil(t *testing.T) {
 	t.Parallel()
+
+	stats := &fileWriteStats{
+		sourceColumns:             make(map[string]struct{}),
+		skippedDestinationColumns: make(map[string]struct{}),
+	}
 
 	columns, values, err := buildInsertPayload(
 		config.Input{TimestampColumn: "ts"},
@@ -144,6 +152,7 @@ func TestBuildInsertPayloadConvertsNaNToNil(t *testing.T) {
 			"flags":              {},
 			"ff_raw":             {},
 		},
+		stats,
 	)
 	if err != nil {
 		t.Fatalf("buildInsertPayload() error = %v", err)
@@ -156,6 +165,66 @@ func TestBuildInsertPayloadConvertsNaNToNil(t *testing.T) {
 	}
 	if values[len(values)-1] != nil {
 		t.Fatalf("last value = %#v, want nil", values[len(values)-1])
+	}
+	if stats.nanToNullCount != 1 {
+		t.Fatalf("nanToNullCount = %d, want 1", stats.nanToNullCount)
+	}
+}
+
+func TestBuildInsertPayloadTracksSkippedDestinationColumns(t *testing.T) {
+	t.Parallel()
+
+	stats := &fileWriteStats{
+		sourceColumns:             make(map[string]struct{}),
+		skippedDestinationColumns: make(map[string]struct{}),
+	}
+
+	_, _, err := buildInsertPayload(
+		config.Input{TimestampColumn: "ts"},
+		"/tmp/20250930HET1_fixed_1MD410.iud",
+		tabular.TypedRow{
+			LineNumber: 4,
+			Values: map[string]any{
+				"ts":       time.Date(2025, time.September, 30, 13, 12, 25, 0, time.UTC),
+				"015-2017": 675.44,
+				"063-2017": 688.14,
+			},
+		},
+		time.Date(2025, time.September, 30, 13, 12, 25, 0, time.UTC),
+		map[string]struct{}{
+			"ts":                 {},
+			"source_file":        {},
+			"source_line_number": {},
+			"flags":              {},
+			"015_2017":           {},
+		},
+		stats,
+	)
+	if err != nil {
+		t.Fatalf("buildInsertPayload() error = %v", err)
+	}
+
+	if _, ok := stats.sourceColumns["015_2017"]; !ok {
+		t.Fatalf("sourceColumns missing 015_2017")
+	}
+	if _, ok := stats.sourceColumns["063_2017"]; !ok {
+		t.Fatalf("sourceColumns missing 063_2017")
+	}
+	if _, ok := stats.skippedDestinationColumns["063_2017"]; !ok {
+		t.Fatalf("skippedDestinationColumns missing 063_2017")
+	}
+}
+
+func TestIsCollectorManagedColumn(t *testing.T) {
+	t.Parallel()
+
+	for _, column := range []string{"ts", "source_file", "source_line_number", "flags", "ingested_at"} {
+		if !isCollectorManagedColumn(column) {
+			t.Fatalf("isCollectorManagedColumn(%q) = false, want true", column)
+		}
+	}
+	if isCollectorManagedColumn("pmax") {
+		t.Fatalf("isCollectorManagedColumn(pmax) = true, want false")
 	}
 }
 

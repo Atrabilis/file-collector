@@ -23,6 +23,12 @@ type WriteResult struct {
 	RowsInserted int
 }
 
+type fileWriteStats struct {
+	sourceColumns             map[string]struct{}
+	skippedDestinationColumns map[string]struct{}
+	nanToNullCount            int
+}
+
 const maxPostgresParameters = 65535
 
 func WriteInputFiles(ctx context.Context, input config.Input, output config.Output, files []string) (*WriteResult, error) {
@@ -168,6 +174,10 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 	var batchValues []any
 	batchRowCount := 0
 	batchLastLineNumber := 0
+	stats := &fileWriteStats{
+		sourceColumns:             make(map[string]struct{}),
+		skippedDestinationColumns: make(map[string]struct{}),
+	}
 
 	flushBatch := func() error {
 		if batchRowCount == 0 {
@@ -203,7 +213,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			return fmt.Errorf("timestamp column %q is not parsed as time at line %d", input.TimestampColumn, row.LineNumber)
 		}
 
-		columns, values, err := buildInsertPayload(input, filePath, row, ts, destinationColumns)
+		columns, values, err := buildInsertPayload(input, filePath, row, ts, destinationColumns, stats)
 		if err != nil {
 			return err
 		}
@@ -243,6 +253,8 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 		return err
 	}
 
+	logFileWriteStats(filePath, destinationColumns, stats)
+
 	return tx.Commit()
 }
 
@@ -278,7 +290,7 @@ func loadDestinationColumns(ctx context.Context, db *sql.DB, connCfg *Connection
 	return columns, nil
 }
 
-func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRow, ts time.Time, destinationColumns map[string]struct{}) ([]string, []any, error) {
+func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRow, ts time.Time, destinationColumns map[string]struct{}, stats *fileWriteStats) ([]string, []any, error) {
 	flagsJSON, err := json.Marshal(map[string]any{})
 	if err != nil {
 		return nil, nil, err
@@ -299,7 +311,13 @@ func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRo
 		if normalized == "" {
 			continue
 		}
+		if stats != nil {
+			stats.sourceColumns[normalized] = struct{}{}
+		}
 		if _, ok := destinationColumns[normalized]; !ok {
+			if stats != nil {
+				stats.skippedDestinationColumns[normalized] = struct{}{}
+			}
 			continue
 		}
 
@@ -309,6 +327,9 @@ func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRo
 			if math.IsNaN(typed) {
 				columns = append(columns, normalized)
 				values = append(values, nil)
+				if stats != nil {
+					stats.nanToNullCount++
+				}
 				continue
 			}
 			columns = append(columns, normalized)
@@ -326,6 +347,54 @@ func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRo
 	}
 
 	return columns, values, nil
+}
+
+func logFileWriteStats(filePath string, destinationColumns map[string]struct{}, stats *fileWriteStats) {
+	if stats == nil {
+		return
+	}
+
+	skipped := sortedMapKeys(stats.skippedDestinationColumns)
+	if len(skipped) > 0 {
+		fmt.Printf("  file_info: %s skipped_destination_missing_columns=%s\n", filepath.Base(filePath), strings.Join(skipped, ","))
+	}
+
+	missingFromSource := make([]string, 0)
+	for column := range destinationColumns {
+		if isCollectorManagedColumn(column) {
+			continue
+		}
+		if _, ok := stats.sourceColumns[column]; ok {
+			continue
+		}
+		missingFromSource = append(missingFromSource, column)
+	}
+	sort.Strings(missingFromSource)
+	if len(missingFromSource) > 0 {
+		fmt.Printf("  file_info: %s destination_columns_missing_in_source=%s\n", filepath.Base(filePath), strings.Join(missingFromSource, ","))
+	}
+
+	if stats.nanToNullCount > 0 {
+		fmt.Printf("  file_info: %s nan_to_null_count=%d\n", filepath.Base(filePath), stats.nanToNullCount)
+	}
+}
+
+func sortedMapKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func isCollectorManagedColumn(column string) bool {
+	switch column {
+	case "ts", "source_file", "source_line_number", "flags", "ingested_at":
+		return true
+	default:
+		return false
+	}
 }
 
 func containsString(values []string, target string) bool {
