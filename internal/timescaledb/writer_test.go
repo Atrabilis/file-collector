@@ -1,6 +1,7 @@
 package timescaledb
 
 import (
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,6 +27,15 @@ func TestBuildInsertPayloadNormalizesColumns(t *testing.T) {
 			},
 		},
 		time.Date(2026, time.June, 4, 0, 0, 2, 0, time.UTC),
+		map[string]struct{}{
+			"ts":                 {},
+			"source_file":        {},
+			"source_line_number": {},
+			"flags":              {},
+			"2_pe_201_w":         {},
+			"2_ve_201_v":         {},
+			"thd_v_1_pct":        {},
+		},
 	)
 	if err != nil {
 		t.Fatalf("buildInsertPayload() error = %v", err)
@@ -60,6 +70,13 @@ func TestBuildInsertPayloadSkipsTimestampSourceColumns(t *testing.T) {
 			},
 		},
 		time.Date(2019, time.December, 17, 14, 22, 3, 0, time.UTC),
+		map[string]struct{}{
+			"ts":                 {},
+			"source_file":        {},
+			"source_line_number": {},
+			"flags":              {},
+			"pmax":               {},
+		},
 	)
 	if err != nil {
 		t.Fatalf("buildInsertPayload() error = %v", err)
@@ -69,6 +86,76 @@ func TestBuildInsertPayloadSkipsTimestampSourceColumns(t *testing.T) {
 	wantCols := "ts,source_file,source_line_number,flags,pmax"
 	if gotCols != wantCols {
 		t.Fatalf("columns = %q, want %q", gotCols, wantCols)
+	}
+}
+
+func TestBuildInsertPayloadSkipsColumnsMissingFromDestination(t *testing.T) {
+	t.Parallel()
+
+	columns, _, err := buildInsertPayload(
+		config.Input{TimestampColumn: "ts"},
+		"/tmp/20250930HET1_fixed_1MD410.iud",
+		tabular.TypedRow{
+			LineNumber: 4,
+			Values: map[string]any{
+				"ts":       time.Date(2025, time.September, 30, 13, 12, 25, 0, time.UTC),
+				"015-2017": 675.44,
+				"063-2017": 688.14,
+			},
+		},
+		time.Date(2025, time.September, 30, 13, 12, 25, 0, time.UTC),
+		map[string]struct{}{
+			"ts":                 {},
+			"source_file":        {},
+			"source_line_number": {},
+			"flags":              {},
+			"015_2017":           {},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildInsertPayload() error = %v", err)
+	}
+
+	gotCols := strings.Join(columns, ",")
+	wantCols := `ts,source_file,source_line_number,flags,015_2017`
+	if gotCols != wantCols {
+		t.Fatalf("columns = %q, want %q", gotCols, wantCols)
+	}
+}
+
+func TestBuildInsertPayloadConvertsNaNToNil(t *testing.T) {
+	t.Parallel()
+
+	columns, values, err := buildInsertPayload(
+		config.Input{TimestampColumn: "ts"},
+		"/tmp/20250930HET1_fixed_1MD410.iud",
+		tabular.TypedRow{
+			LineNumber: 4,
+			Values: map[string]any{
+				"ts":     time.Date(2025, time.September, 30, 13, 12, 25, 0, time.UTC),
+				"FF_raw": math.NaN(),
+			},
+		},
+		time.Date(2025, time.September, 30, 13, 12, 25, 0, time.UTC),
+		map[string]struct{}{
+			"ts":                 {},
+			"source_file":        {},
+			"source_line_number": {},
+			"flags":              {},
+			"ff_raw":             {},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildInsertPayload() error = %v", err)
+	}
+
+	gotCols := strings.Join(columns, ",")
+	wantCols := "ts,source_file,source_line_number,flags,ff_raw"
+	if gotCols != wantCols {
+		t.Fatalf("columns = %q, want %q", gotCols, wantCols)
+	}
+	if values[len(values)-1] != nil {
+		t.Fatalf("last value = %#v, want nil", values[len(values)-1])
 	}
 }
 

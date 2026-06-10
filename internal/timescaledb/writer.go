@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -40,17 +41,22 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		return nil, err
 	}
 
+	destinationColumns, err := loadDestinationColumns(ctx, db, connCfg)
+	if err != nil {
+		return nil, err
+	}
+
 	columnSpecs := make(map[string]tabular.ColumnSpec, len(input.Columns))
 	for columnName, column := range input.Columns {
 		columnSpecs[columnName] = tabular.ColumnSpec{Type: tabular.ColumnType(column.Type)}
 	}
 
 	opts := tabular.TypedReadOptions{
-		DecimalComma:          input.DecimalComma,
-		TimestampColumn:       input.TimestampColumn,
+		DecimalComma:           input.DecimalComma,
+		TimestampColumn:        input.TimestampColumn,
 		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
-		ColumnSpecs:           columnSpecs,
-		TimestampLayouts:      []string{"2006_01_02 15:04:05", time.RFC3339},
+		ColumnSpecs:            columnSpecs,
+		TimestampLayouts:       []string{"2006_01_02 15:04:05", time.RFC3339},
 	}
 	if len(input.TimestampLayouts) > 0 {
 		opts.TimestampLayouts = append([]string(nil), input.TimestampLayouts...)
@@ -68,7 +74,7 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		fmt.Printf("  file_started: %s\n", filepath.Base(filePath))
 		fileStartedAt := time.Now()
 		fileResult := &WriteResult{}
-		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, fileResult); err != nil {
+		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, fileResult); err != nil {
 			return nil, fmt.Errorf("write %s: %w", filePath, err)
 		}
 		result.RowsInserted += fileResult.RowsInserted
@@ -104,7 +110,10 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 			for filePath := range fileCh {
 				fileStartedAt := time.Now()
 				singleResult := &WriteResult{}
-				err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, singleResult)
+				destinationColumns, err := loadDestinationColumns(ctx, db, connCfg)
+				if err == nil {
+					err = writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, singleResult)
+				}
 				outcomeCh <- writeOutcome{
 					filePath:     filePath,
 					rowsInserted: singleResult.RowsInserted,
@@ -146,7 +155,7 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 	return result, nil
 }
 
-func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, filePath string, opts tabular.TypedReadOptions, result *WriteResult) error {
+func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, filePath string, opts tabular.TypedReadOptions, destinationColumns map[string]struct{}, result *WriteResult) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -194,7 +203,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			return fmt.Errorf("timestamp column %q is not parsed as time at line %d", input.TimestampColumn, row.LineNumber)
 		}
 
-		columns, values, err := buildInsertPayload(input, filePath, row, ts)
+		columns, values, err := buildInsertPayload(input, filePath, row, ts, destinationColumns)
 		if err != nil {
 			return err
 		}
@@ -237,7 +246,39 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 	return tx.Commit()
 }
 
-func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRow, ts time.Time) ([]string, []any, error) {
+func loadDestinationColumns(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig) (map[string]struct{}, error) {
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT column_name
+		   FROM information_schema.columns
+		  WHERE table_schema = $1
+		    AND table_name = $2`,
+		connCfg.Schema,
+		connCfg.Table,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load destination columns for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var columnName string
+		if err := rows.Scan(&columnName); err != nil {
+			return nil, fmt.Errorf("scan destination column for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
+		}
+		columns[columnName] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate destination columns for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
+	}
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("destination table %s.%s has no visible columns", connCfg.Schema, connCfg.Table)
+	}
+	return columns, nil
+}
+
+func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRow, ts time.Time, destinationColumns map[string]struct{}) ([]string, []any, error) {
 	flagsJSON, err := json.Marshal(map[string]any{})
 	if err != nil {
 		return nil, nil, err
@@ -258,10 +299,21 @@ func buildInsertPayload(input config.Input, filePath string, row tabular.TypedRo
 		if normalized == "" {
 			continue
 		}
+		if _, ok := destinationColumns[normalized]; !ok {
+			continue
+		}
 
 		value := row.Values[rawColumnName]
 		switch typed := value.(type) {
-		case float64, int64, int, string, bool, nil:
+		case float64:
+			if math.IsNaN(typed) {
+				columns = append(columns, normalized)
+				values = append(values, nil)
+				continue
+			}
+			columns = append(columns, normalized)
+			values = append(values, typed)
+		case int64, int, string, bool, nil:
 			columns = append(columns, normalized)
 			values = append(values, typed)
 		case time.Time:
