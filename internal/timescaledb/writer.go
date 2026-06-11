@@ -51,6 +51,10 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 	if err != nil {
 		return nil, err
 	}
+	primaryKeyColumns, err := loadPrimaryKeyColumns(ctx, db, connCfg)
+	if err != nil {
+		return nil, err
+	}
 
 	columnSpecs := make(map[string]tabular.ColumnSpec, len(input.Columns))
 	for columnName, column := range input.Columns {
@@ -59,6 +63,8 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 
 	opts := tabular.TypedReadOptions{
 		DecimalComma:           input.DecimalComma,
+		SkipLines:              input.SkipLines,
+		HeaderColumns:          append([]string(nil), input.HeaderColumns...),
 		TimestampColumn:        input.TimestampColumn,
 		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
 		ColumnSpecs:            columnSpecs,
@@ -73,14 +79,14 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 
 	result := &WriteResult{}
 	if input.Mode == "all" && input.Concurrency > 1 && len(files) > 1 {
-		return writeFilesConcurrently(ctx, db, connCfg, input, output, files, opts, result)
+		return writeFilesConcurrently(ctx, db, connCfg, input, output, files, opts, destinationColumns, primaryKeyColumns, result)
 	}
 
 	for _, filePath := range files {
 		fmt.Printf("  file_started: %s\n", filepath.Base(filePath))
 		fileStartedAt := time.Now()
 		fileResult := &WriteResult{}
-		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, fileResult); err != nil {
+		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, primaryKeyColumns, fileResult); err != nil {
 			return nil, fmt.Errorf("write %s: %w", filePath, err)
 		}
 		result.RowsInserted += fileResult.RowsInserted
@@ -90,7 +96,7 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 	return result, nil
 }
 
-func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, files []string, opts tabular.TypedReadOptions, result *WriteResult) (*WriteResult, error) {
+func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, files []string, opts tabular.TypedReadOptions, destinationColumns map[string]struct{}, primaryKeyColumns []string, result *WriteResult) (*WriteResult, error) {
 	workerCount := input.Concurrency
 	if workerCount > len(files) {
 		workerCount = len(files)
@@ -116,10 +122,7 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 			for filePath := range fileCh {
 				fileStartedAt := time.Now()
 				singleResult := &WriteResult{}
-				destinationColumns, err := loadDestinationColumns(ctx, db, connCfg)
-				if err == nil {
-					err = writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, singleResult)
-				}
+				err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, primaryKeyColumns, singleResult)
 				outcomeCh <- writeOutcome{
 					filePath:     filePath,
 					rowsInserted: singleResult.RowsInserted,
@@ -161,7 +164,7 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 	return result, nil
 }
 
-func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, filePath string, opts tabular.TypedReadOptions, destinationColumns map[string]struct{}, result *WriteResult) error {
+func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, filePath string, opts tabular.TypedReadOptions, destinationColumns map[string]struct{}, primaryKeyColumns []string, result *WriteResult) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -174,6 +177,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 	var batchValues []any
 	batchRowCount := 0
 	batchLastLineNumber := 0
+	var batchPrimaryKeyRows map[string]int
 	stats := &fileWriteStats{
 		sourceColumns:             make(map[string]struct{}),
 		skippedDestinationColumns: make(map[string]struct{}),
@@ -199,6 +203,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 		batchValues = nil
 		batchRowCount = 0
 		batchLastLineNumber = 0
+		batchPrimaryKeyRows = nil
 		return nil
 	}
 
@@ -226,11 +231,22 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 
 		if batchRowCount == 0 {
 			batchColumns = append([]string(nil), columns...)
+			batchPrimaryKeyRows = make(map[string]int)
 		}
 
 		maxBatchRows := effectiveBatchSize(output.TimescaleDB.BatchSize, len(batchColumns))
 		if maxBatchRows <= 0 {
 			return fmt.Errorf("no valid batch size for %d columns", len(batchColumns))
+		}
+
+		if keySignature, ok := buildPrimaryKeySignature(batchColumns, values, primaryKeyColumns); ok {
+			if rowIndex, exists := batchPrimaryKeyRows[keySignature]; exists {
+				rowWidth := len(batchColumns)
+				copy(batchValues[rowIndex*rowWidth:(rowIndex+1)*rowWidth], values)
+				batchLastLineNumber = row.LineNumber
+				return nil
+			}
+			batchPrimaryKeyRows[keySignature] = batchRowCount
 		}
 
 		batchValues = append(batchValues, values...)
@@ -286,6 +302,41 @@ func loadDestinationColumns(ctx context.Context, db *sql.DB, connCfg *Connection
 	}
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("destination table %s.%s has no visible columns", connCfg.Schema, connCfg.Table)
+	}
+	return columns, nil
+}
+
+func loadPrimaryKeyColumns(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig) ([]string, error) {
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT kcu.column_name
+		   FROM information_schema.table_constraints tc
+		   JOIN information_schema.key_column_usage kcu
+		     ON tc.constraint_name = kcu.constraint_name
+		    AND tc.table_schema = kcu.table_schema
+		    AND tc.table_name = kcu.table_name
+		  WHERE tc.constraint_type = 'PRIMARY KEY'
+		    AND tc.table_schema = $1
+		    AND tc.table_name = $2
+		  ORDER BY kcu.ordinal_position`,
+		connCfg.Schema,
+		connCfg.Table,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load primary key columns for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
+	}
+	defer rows.Close()
+
+	columns := make([]string, 0)
+	for rows.Next() {
+		var columnName string
+		if err := rows.Scan(&columnName); err != nil {
+			return nil, fmt.Errorf("scan primary key column for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
+		}
+		columns = append(columns, columnName)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate primary key columns for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
 	}
 	return columns, nil
 }
@@ -377,6 +428,31 @@ func logFileWriteStats(filePath string, destinationColumns map[string]struct{}, 
 	if stats.nanToNullCount > 0 {
 		fmt.Printf("  file_info: %s nan_to_null_count=%d\n", filepath.Base(filePath), stats.nanToNullCount)
 	}
+}
+
+func buildPrimaryKeySignature(columns []string, values []any, primaryKeyColumns []string) (string, bool) {
+	if len(primaryKeyColumns) == 0 || len(columns) != len(values) {
+		return "", false
+	}
+
+	var b strings.Builder
+	for _, primaryKeyColumn := range primaryKeyColumns {
+		idx := -1
+		for columnIdx, column := range columns {
+			if column == primaryKeyColumn {
+				idx = columnIdx
+				break
+			}
+		}
+		if idx < 0 {
+			return "", false
+		}
+		b.WriteString(primaryKeyColumn)
+		b.WriteByte('=')
+		b.WriteString(fmt.Sprint(values[idx]))
+		b.WriteByte('|')
+	}
+	return b.String(), true
 }
 
 func sortedMapKeys(values map[string]struct{}) []string {

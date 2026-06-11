@@ -14,6 +14,8 @@ type Input struct {
 	Mode            string                  `yaml:"mode"`
 	LastNFiles      int                     `yaml:"last_n_files"`
 	Concurrency     int                     `yaml:"concurrency"`
+	SkipLines       int                     `yaml:"skip_lines"`
+	HeaderColumns   []string                `yaml:"header_columns"`
 	TimestampColumn string                  `yaml:"timestamp_column"`
 	TimestampSourceColumns []string         `yaml:"timestamp_source_columns"`
 	TimestampLayouts []string               `yaml:"timestamp_layouts"`
@@ -105,6 +107,14 @@ func (c *Config) Validate() error {
 		if input.Concurrency <= 0 {
 			c.Inputs[idx].Concurrency = 1
 			input.Concurrency = 1
+		}
+		if input.SkipLines < 0 {
+			return fmt.Errorf("input %q has negative skip_lines", input.Name)
+		}
+		for headerIdx, headerColumn := range input.HeaderColumns {
+			if strings.TrimSpace(headerColumn) == "" {
+				return fmt.Errorf("input %q has empty header_columns[%d]", input.Name, headerIdx)
+			}
 		}
 		if strings.TrimSpace(input.TimestampColumn) == "" {
 			return fmt.Errorf("input %q has empty timestamp_column", input.Name)

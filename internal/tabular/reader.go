@@ -27,7 +27,9 @@ type MalformedRow struct {
 }
 
 type ReadOptions struct {
-	Delimiter rune
+	Delimiter     rune
+	SkipLines     int
+	HeaderColumns []string
 }
 
 func ReadFileSummary(path string, previewRows int) (*FileSummary, error) {
@@ -45,21 +47,85 @@ func ReadFileSummaryWithOptions(path string, previewRows int, opts ReadOptions) 
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, maxScanCapacity)
 
-	headerLine, ok, err := nextNonEmptyLine(scanner)
+	delimiter := opts.Delimiter
+	lineNumber, err := skipScannerLines(scanner, opts.SkipLines)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, fmt.Errorf("empty file")
-	}
 
-	delimiter := opts.Delimiter
-	if delimiter == 0 {
-		delimiter = DetectDelimiter(headerLine)
-	}
-	header := splitLine(headerLine, delimiter)
-	if len(header) < 2 {
-		return nil, fmt.Errorf("could not parse header columns")
+	var header []string
+	if len(opts.HeaderColumns) > 0 {
+		header = append([]string(nil), opts.HeaderColumns...)
+		if len(header) < 2 {
+			return nil, fmt.Errorf("could not parse header columns")
+		}
+		if delimiter == 0 {
+			sampleLine, ok, err := nextNonEmptyLine(scanner)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, fmt.Errorf("empty file")
+			}
+			lineNumber++
+			delimiter = DetectDelimiter(sampleLine)
+			row := splitLine(sampleLine, delimiter)
+			if len(row) == len(header) {
+				// Count the sampled row as data since there is no header row in the file.
+				summary := &FileSummary{
+					Delimiter:     delimiter,
+					Header:        header,
+					MalformedRows: make([]MalformedRow, 0, max(0, previewRows)),
+					PreviewRows:   make([][]string, 0, max(0, previewRows)),
+					RowCount:      1,
+				}
+				summary.WellFormedRowCount = 1
+				if len(summary.PreviewRows) < previewRows {
+					summary.PreviewRows = append(summary.PreviewRows, row)
+				}
+				if err := consumeRows(scanner, delimiter, header, previewRows, lineNumber, summary); err != nil {
+					return nil, err
+				}
+				return summary, nil
+			}
+
+			summary := &FileSummary{
+				Delimiter:     delimiter,
+				Header:        header,
+				MalformedRows: make([]MalformedRow, 0, max(0, previewRows)),
+				PreviewRows:   make([][]string, 0, max(0, previewRows)),
+				RowCount:      1,
+			}
+			summary.MalformedRowCount = 1
+			if len(summary.MalformedRows) < previewRows {
+				summary.MalformedRows = append(summary.MalformedRows, MalformedRow{
+					LineNumber:      lineNumber,
+					ExpectedColumns: len(header),
+					ActualColumns:   len(row),
+					Raw:             sampleLine,
+				})
+			}
+			if err := consumeRows(scanner, delimiter, header, previewRows, lineNumber, summary); err != nil {
+				return nil, err
+			}
+			return summary, nil
+		}
+	} else {
+		headerLine, ok, err := nextNonEmptyLine(scanner)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("empty file")
+		}
+		lineNumber++
+		if delimiter == 0 {
+			delimiter = DetectDelimiter(headerLine)
+		}
+		header = splitLine(headerLine, delimiter)
+		if len(header) < 2 {
+			return nil, fmt.Errorf("could not parse header columns")
+		}
 	}
 
 	summary := &FileSummary{
@@ -69,7 +135,14 @@ func ReadFileSummaryWithOptions(path string, previewRows int, opts ReadOptions) 
 		PreviewRows:   make([][]string, 0, max(0, previewRows)),
 	}
 
-	lineNumber := 1
+	if err := consumeRows(scanner, delimiter, header, previewRows, lineNumber, summary); err != nil {
+		return nil, err
+	}
+
+	return summary, nil
+}
+
+func consumeRows(scanner *bufio.Scanner, delimiter rune, header []string, previewRows int, lineNumber int, summary *FileSummary) error {
 	for scanner.Scan() {
 		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
@@ -99,10 +172,10 @@ func ReadFileSummaryWithOptions(path string, previewRows int, opts ReadOptions) 
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return err
 	}
 
-	return summary, nil
+	return nil
 }
 
 func DetectDelimiter(header string) rune {
@@ -143,4 +216,19 @@ func nextNonEmptyLine(scanner *bufio.Scanner) (string, bool, error) {
 	}
 
 	return "", false, nil
+}
+
+func skipScannerLines(scanner *bufio.Scanner, skipLines int) (int, error) {
+	lineNumber := 0
+	for skipped := 0; skipped < skipLines; {
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return lineNumber, err
+			}
+			return lineNumber, nil
+		}
+		lineNumber++
+		skipped++
+	}
+	return lineNumber, nil
 }

@@ -26,6 +26,8 @@ type ColumnSpec struct {
 type TypedReadOptions struct {
 	Delimiter        rune
 	DecimalComma     bool
+	SkipLines        int
+	HeaderColumns    []string
 	TimestampColumn  string
 	TimestampSourceColumns []string
 	ColumnSpecs      map[string]ColumnSpec
@@ -60,7 +62,9 @@ type ParseError struct {
 
 func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (*TypedFileSummary, error) {
 	summary, err := ReadFileSummaryWithOptions(path, previewRows, ReadOptions{
-		Delimiter: opts.Delimiter,
+		Delimiter:     opts.Delimiter,
+		SkipLines:     opts.SkipLines,
+		HeaderColumns: opts.HeaderColumns,
 	})
 	if err != nil {
 		return nil, err
@@ -81,18 +85,9 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, maxScanCapacity)
 
-	headerLine, ok, err := nextNonEmptyLine(scanner)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("empty file")
-	}
-
-	header := splitLine(headerLine, delimiter)
 	typed := &TypedFileSummary{
 		Delimiter:          delimiter,
-		Header:             header,
+		Header:             append([]string(nil), summary.Header...),
 		RowCount:           summary.RowCount,
 		WellFormedRowCount: summary.WellFormedRowCount,
 		MalformedRowCount:  summary.MalformedRowCount,
@@ -101,7 +96,24 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 		PreviewRows:        make([]TypedRow, 0, min(previewRows, summary.WellFormedRowCount)),
 	}
 
-	lineNumber := 1
+	lineNumber, err := skipScannerLines(scanner, opts.SkipLines)
+	if err != nil {
+		return nil, err
+	}
+	header := append([]string(nil), typed.Header...)
+	if len(opts.HeaderColumns) > 0 {
+		header = append(header[:0], opts.HeaderColumns...)
+	} else {
+		headerLine, ok, err := nextNonEmptyLine(scanner)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("empty file")
+		}
+		lineNumber++
+		header = splitLine(headerLine, delimiter)
+	}
 	for scanner.Scan() {
 		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
@@ -214,21 +226,46 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, maxScanCapacity)
 
-	headerLine, ok, err := nextNonEmptyLine(scanner)
+	lineNumber, err := skipScannerLines(scanner, opts.SkipLines)
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return fmt.Errorf("empty file")
-	}
 
+	var header []string
 	delimiter := opts.Delimiter
-	if delimiter == 0 {
-		delimiter = DetectDelimiter(headerLine)
+	if len(opts.HeaderColumns) > 0 {
+		header = append([]string(nil), opts.HeaderColumns...)
+		if delimiter == 0 {
+			sampleLine, ok, err := nextNonEmptyLine(scanner)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("empty file")
+			}
+			lineNumber++
+			delimiter = DetectDelimiter(sampleLine)
+			raw := splitLine(sampleLine, delimiter)
+			if len(raw) == len(header) {
+				if err := fn(buildTypedRow(lineNumber, raw, header, opts)); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		headerLine, ok, err := nextNonEmptyLine(scanner)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("empty file")
+		}
+		lineNumber++
+		if delimiter == 0 {
+			delimiter = DetectDelimiter(headerLine)
+		}
+		header = splitLine(headerLine, delimiter)
 	}
-
-	header := splitLine(headerLine, delimiter)
-	lineNumber := 1
 
 	for scanner.Scan() {
 		lineNumber++
@@ -242,55 +279,7 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 			continue
 		}
 
-		values := make(map[string]any, len(header))
-		rawByColumn := make(map[string]string, len(header))
-		for idx, columnName := range header {
-			if idx < len(raw) {
-				rawByColumn[columnName] = raw[idx]
-			}
-		}
-		if len(opts.TimestampSourceColumns) > 0 {
-			value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts)
-			if err != nil {
-				values[opts.TimestampColumn] = joined
-			} else {
-				values[opts.TimestampColumn] = value
-			}
-		}
-		for idx, columnName := range header {
-			if idx >= len(raw) {
-				continue
-			}
-
-			if len(opts.TimestampSourceColumns) == 0 && columnName == opts.TimestampColumn {
-				value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts)
-				if err != nil {
-					values[columnName] = raw[idx]
-				} else {
-					values[columnName] = value
-				}
-				continue
-			}
-
-			spec, ok := opts.ColumnSpecs[columnName]
-			if !ok {
-				values[columnName] = inferValue(raw[idx], opts.DecimalComma, opts.TimestampLayouts)
-				continue
-			}
-
-			value, err := parseValueByType(raw[idx], spec.Type, opts.DecimalComma, opts.TimestampLayouts)
-			if err != nil {
-				values[columnName] = raw[idx]
-				continue
-			}
-			values[columnName] = value
-		}
-
-		if err := fn(TypedRow{
-			LineNumber: lineNumber,
-			Raw:        raw,
-			Values:     values,
-		}); err != nil {
+		if err := fn(buildTypedRow(lineNumber, raw, header, opts)); err != nil {
 			return err
 		}
 	}
@@ -300,6 +289,58 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 	}
 
 	return nil
+}
+
+func buildTypedRow(lineNumber int, raw []string, header []string, opts TypedReadOptions) TypedRow {
+	values := make(map[string]any, len(header))
+	rawByColumn := make(map[string]string, len(header))
+	for idx, columnName := range header {
+		if idx < len(raw) {
+			rawByColumn[columnName] = raw[idx]
+		}
+	}
+	if len(opts.TimestampSourceColumns) > 0 {
+		value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts)
+		if err != nil {
+			values[opts.TimestampColumn] = joined
+		} else {
+			values[opts.TimestampColumn] = value
+		}
+	}
+	for idx, columnName := range header {
+		if idx >= len(raw) {
+			continue
+		}
+
+		if len(opts.TimestampSourceColumns) == 0 && columnName == opts.TimestampColumn {
+			value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts)
+			if err != nil {
+				values[columnName] = raw[idx]
+			} else {
+				values[columnName] = value
+			}
+			continue
+		}
+
+		spec, ok := opts.ColumnSpecs[columnName]
+		if !ok {
+			values[columnName] = inferValue(raw[idx], opts.DecimalComma, opts.TimestampLayouts)
+			continue
+		}
+
+		value, err := parseValueByType(raw[idx], spec.Type, opts.DecimalComma, opts.TimestampLayouts)
+		if err != nil {
+			values[columnName] = raw[idx]
+			continue
+		}
+		values[columnName] = value
+	}
+
+	return TypedRow{
+		LineNumber: lineNumber,
+		Raw:        raw,
+		Values:     values,
+	}
 }
 
 func parseValueByType(raw string, valueType ColumnType, decimalComma bool, layouts []string) (any, error) {
