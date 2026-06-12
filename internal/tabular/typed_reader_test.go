@@ -154,3 +154,44 @@ func TestReadTypedFileSummaryBuildsCombinedTimestamp(t *testing.T) {
 		t.Fatalf("ts = %s, want %s", got, want)
 	}
 }
+
+func TestReadTypedFileSummaryBuildsCombinedTimestampWithTimezone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.csv")
+	content := "\"Date\",\"Time\",\"Isc(p)\"\n\"26/06/12\",\"14:02:14\",\"1.277\"\n"
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+
+	summary, err := ReadTypedFileSummary(path, 1, TypedReadOptions{
+		TimestampColumn:        "ts",
+		SkipLines:              1,
+		HeaderColumns:          []string{"date", "time", "isc_p"},
+		TimestampSourceColumns: []string{"date", "time"},
+		TimestampLayouts:       []string{"06/01/02 15:04:05"},
+		TimestampLocation:      loc,
+		ColumnSpecs: map[string]ColumnSpec{
+			"isc_p": {Type: ColumnTypeFloat64},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReadTypedFileSummary() error = %v", err)
+	}
+
+	got, ok := summary.PreviewRows[0].Values["ts"].(time.Time)
+	if !ok {
+		t.Fatalf("ts should be time.Time, got %#v", summary.PreviewRows[0].Values["ts"])
+	}
+	want := time.Date(2026, time.June, 12, 14, 2, 14, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("ts = %s, want %s", got, want)
+	}
+}

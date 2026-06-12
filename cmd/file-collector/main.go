@@ -244,13 +244,27 @@ func runReadFromConfig(configPath, inputName string, maxPreviewRows int) error {
 			}
 		}
 
+		var timestampLocation *time.Location
+		if strings.TrimSpace(input.TimestampTimezone) != "" {
+			loc, err := time.LoadLocation(input.TimestampTimezone)
+			if err != nil {
+				fmt.Printf("  error: load timestamp timezone %q: %v\n\n", input.TimestampTimezone, err)
+				continue
+			}
+			timestampLocation = loc
+		}
+
 		for _, filePath := range files {
 			summary, err := tabular.ReadTypedFileSummary(filePath, maxPreviewRows, tabular.TypedReadOptions{
-				Delimiter:        delimiter,
-				DecimalComma:     input.DecimalComma,
-				TimestampColumn:  input.TimestampColumn,
-				ColumnSpecs:      columnSpecs,
-				TimestampLayouts: []string{"2006_01_02 15:04:05", time.RFC3339},
+				Delimiter:              delimiter,
+				DecimalComma:           input.DecimalComma,
+				SkipLines:              input.SkipLines,
+				HeaderColumns:          append([]string(nil), input.HeaderColumns...),
+				TimestampColumn:        input.TimestampColumn,
+				TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
+				ColumnSpecs:            columnSpecs,
+				TimestampLayouts:       []string{"2006_01_02 15:04:05", time.RFC3339},
+				TimestampLocation:      timestampLocation,
 			})
 			if err != nil {
 				fmt.Printf("FILE %s\n", filePath)

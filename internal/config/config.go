@@ -19,6 +19,7 @@ type Input struct {
 	TimestampColumn string                  `yaml:"timestamp_column"`
 	TimestampSourceColumns []string         `yaml:"timestamp_source_columns"`
 	TimestampLayouts []string               `yaml:"timestamp_layouts"`
+	TimestampTimezone string                `yaml:"timestamp_timezone"`
 	Delimiter       string                  `yaml:"delimiter"`
 	DecimalComma    bool                    `yaml:"decimal_comma"`
 	Include         []string                `yaml:"include"`

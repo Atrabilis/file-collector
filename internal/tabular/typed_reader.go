@@ -32,6 +32,7 @@ type TypedReadOptions struct {
 	TimestampSourceColumns []string
 	ColumnSpecs      map[string]ColumnSpec
 	TimestampLayouts []string
+	TimestampLocation *time.Location
 }
 
 type TypedFileSummary struct {
@@ -133,7 +134,7 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 			}
 		}
 		if len(opts.TimestampSourceColumns) > 0 {
-			value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts)
+			value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts, opts.TimestampLocation)
 			if err != nil {
 				typed.ParseErrorCount++
 				if len(typed.ParseErrors) < previewRows {
@@ -156,7 +157,7 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 			}
 
 			if len(opts.TimestampSourceColumns) == 0 && columnName == opts.TimestampColumn {
-				value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts)
+				value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts, opts.TimestampLocation)
 				if err != nil {
 					typed.ParseErrorCount++
 					if len(typed.ParseErrors) < previewRows {
@@ -177,11 +178,11 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 
 			spec, ok := opts.ColumnSpecs[columnName]
 			if !ok {
-				values[columnName] = inferValue(raw[idx], opts.DecimalComma, opts.TimestampLayouts)
+				values[columnName] = inferValue(raw[idx], opts.DecimalComma, opts.TimestampLayouts, opts.TimestampLocation)
 				continue
 			}
 
-			value, err := parseValueByType(raw[idx], spec.Type, opts.DecimalComma, opts.TimestampLayouts)
+			value, err := parseValueByType(raw[idx], spec.Type, opts.DecimalComma, opts.TimestampLayouts, opts.TimestampLocation)
 			if err != nil {
 				typed.ParseErrorCount++
 				if len(typed.ParseErrors) < previewRows {
@@ -300,7 +301,7 @@ func buildTypedRow(lineNumber int, raw []string, header []string, opts TypedRead
 		}
 	}
 	if len(opts.TimestampSourceColumns) > 0 {
-		value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts)
+		value, joined, err := parseCombinedTimestamp(rawByColumn, opts.TimestampSourceColumns, opts.TimestampLayouts, opts.TimestampLocation)
 		if err != nil {
 			values[opts.TimestampColumn] = joined
 		} else {
@@ -313,7 +314,7 @@ func buildTypedRow(lineNumber int, raw []string, header []string, opts TypedRead
 		}
 
 		if len(opts.TimestampSourceColumns) == 0 && columnName == opts.TimestampColumn {
-			value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts)
+			value, err := parseValueByType(raw[idx], ColumnTypeTimestamp, opts.DecimalComma, opts.TimestampLayouts, opts.TimestampLocation)
 			if err != nil {
 				values[columnName] = raw[idx]
 			} else {
@@ -324,11 +325,11 @@ func buildTypedRow(lineNumber int, raw []string, header []string, opts TypedRead
 
 		spec, ok := opts.ColumnSpecs[columnName]
 		if !ok {
-			values[columnName] = inferValue(raw[idx], opts.DecimalComma, opts.TimestampLayouts)
+			values[columnName] = inferValue(raw[idx], opts.DecimalComma, opts.TimestampLayouts, opts.TimestampLocation)
 			continue
 		}
 
-		value, err := parseValueByType(raw[idx], spec.Type, opts.DecimalComma, opts.TimestampLayouts)
+		value, err := parseValueByType(raw[idx], spec.Type, opts.DecimalComma, opts.TimestampLayouts, opts.TimestampLocation)
 		if err != nil {
 			values[columnName] = raw[idx]
 			continue
@@ -343,11 +344,11 @@ func buildTypedRow(lineNumber int, raw []string, header []string, opts TypedRead
 	}
 }
 
-func parseValueByType(raw string, valueType ColumnType, decimalComma bool, layouts []string) (any, error) {
+func parseValueByType(raw string, valueType ColumnType, decimalComma bool, layouts []string, location *time.Location) (any, error) {
 	value := strings.TrimSpace(raw)
 	switch valueType {
 	case ColumnTypeTimestamp:
-		return parseTimestampValue(value, layouts)
+		return parseTimestampValue(value, layouts, location)
 	case ColumnTypeFloat64:
 		return parseFloatValue(value, decimalComma)
 	case ColumnTypeInt64:
@@ -361,9 +362,9 @@ func parseValueByType(raw string, valueType ColumnType, decimalComma bool, layou
 	}
 }
 
-func inferValue(raw string, decimalComma bool, layouts []string) any {
+func inferValue(raw string, decimalComma bool, layouts []string, location *time.Location) any {
 	value := strings.TrimSpace(raw)
-	if ts, err := parseTimestampValue(value, layouts); err == nil {
+	if ts, err := parseTimestampValue(value, layouts, location); err == nil {
 		return ts
 	}
 	if fv, err := parseFloatValue(value, decimalComma); err == nil {
@@ -375,13 +376,16 @@ func inferValue(raw string, decimalComma bool, layouts []string) any {
 	return value
 }
 
-func parseTimestampValue(value string, layouts []string) (time.Time, error) {
+func parseTimestampValue(value string, layouts []string, location *time.Location) (time.Time, error) {
 	if len(layouts) == 0 {
 		layouts = []string{"2006_01_02 15:04:05", time.RFC3339}
 	}
+	if location == nil {
+		location = time.UTC
+	}
 	var lastErr error
 	for _, layout := range layouts {
-		ts, err := time.ParseInLocation(layout, value, time.UTC)
+		ts, err := time.ParseInLocation(layout, value, location)
 		if err == nil {
 			return ts, nil
 		}
@@ -390,13 +394,13 @@ func parseTimestampValue(value string, layouts []string) (time.Time, error) {
 	return time.Time{}, lastErr
 }
 
-func parseCombinedTimestamp(rawByColumn map[string]string, sourceColumns, layouts []string) (time.Time, string, error) {
+func parseCombinedTimestamp(rawByColumn map[string]string, sourceColumns, layouts []string, location *time.Location) (time.Time, string, error) {
 	parts := make([]string, 0, len(sourceColumns))
 	for _, columnName := range sourceColumns {
 		parts = append(parts, strings.TrimSpace(rawByColumn[columnName]))
 	}
 	joined := strings.Join(parts, " ")
-	ts, err := parseTimestampValue(joined, layouts)
+	ts, err := parseTimestampValue(joined, layouts, location)
 	if err != nil {
 		return time.Time{}, joined, err
 	}

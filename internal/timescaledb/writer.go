@@ -61,6 +61,15 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		columnSpecs[columnName] = tabular.ColumnSpec{Type: tabular.ColumnType(column.Type)}
 	}
 
+	var timestampLocation *time.Location
+	if strings.TrimSpace(input.TimestampTimezone) != "" {
+		loc, err := time.LoadLocation(input.TimestampTimezone)
+		if err != nil {
+			return nil, fmt.Errorf("load timestamp timezone %q: %w", input.TimestampTimezone, err)
+		}
+		timestampLocation = loc
+	}
+
 	opts := tabular.TypedReadOptions{
 		DecimalComma:           input.DecimalComma,
 		SkipLines:              input.SkipLines,
@@ -69,6 +78,7 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
 		ColumnSpecs:            columnSpecs,
 		TimestampLayouts:       []string{"2006_01_02 15:04:05", time.RFC3339},
+		TimestampLocation:      timestampLocation,
 	}
 	if len(input.TimestampLayouts) > 0 {
 		opts.TimestampLayouts = append([]string(nil), input.TimestampLayouts...)
