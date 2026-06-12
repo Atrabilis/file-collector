@@ -197,7 +197,7 @@ func DetectDelimiter(header string) rune {
 func splitLine(line string, delimiter rune) []string {
 	parts := strings.Split(line, string(delimiter))
 	for idx, part := range parts {
-		parts[idx] = strings.TrimSpace(part)
+		parts[idx] = strings.Trim(strings.TrimSpace(part), `"`)
 	}
 	return parts
 }
