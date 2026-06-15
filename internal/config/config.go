@@ -9,23 +9,25 @@ import (
 )
 
 type Input struct {
-	Name            string                  `yaml:"name"`
-	Directory       string                  `yaml:"directory"`
-	Mode            string                  `yaml:"mode"`
-	LastNFiles      int                     `yaml:"last_n_files"`
-	Concurrency     int                     `yaml:"concurrency"`
-	SkipLines       int                     `yaml:"skip_lines"`
-	HeaderColumns   []string                `yaml:"header_columns"`
-	TimestampColumn string                  `yaml:"timestamp_column"`
-	TimestampSourceColumns []string         `yaml:"timestamp_source_columns"`
-	TimestampLayouts []string               `yaml:"timestamp_layouts"`
-	TimestampTimezone string                `yaml:"timestamp_timezone"`
-	Delimiter       string                  `yaml:"delimiter"`
-	DecimalComma    bool                    `yaml:"decimal_comma"`
-	Include         []string                `yaml:"include"`
-	Exclude         []string                `yaml:"exclude"`
-	Columns         map[string]ColumnConfig `yaml:"columns"`
-	Storage         StorageConfig           `yaml:"storage"`
+	Name                   string                  `yaml:"name"`
+	Directory              string                  `yaml:"directory"`
+	Mode                   string                  `yaml:"mode"`
+	LastNFiles             int                     `yaml:"last_n_files"`
+	StateDirectory         string                  `yaml:"state_directory"`
+	ReplayLines            int                     `yaml:"replay_lines"`
+	Concurrency            int                     `yaml:"concurrency"`
+	SkipLines              int                     `yaml:"skip_lines"`
+	HeaderColumns          []string                `yaml:"header_columns"`
+	TimestampColumn        string                  `yaml:"timestamp_column"`
+	TimestampSourceColumns []string                `yaml:"timestamp_source_columns"`
+	TimestampLayouts       []string                `yaml:"timestamp_layouts"`
+	TimestampTimezone      string                  `yaml:"timestamp_timezone"`
+	Delimiter              string                  `yaml:"delimiter"`
+	DecimalComma           bool                    `yaml:"decimal_comma"`
+	Include                []string                `yaml:"include"`
+	Exclude                []string                `yaml:"exclude"`
+	Columns                map[string]ColumnConfig `yaml:"columns"`
+	Storage                StorageConfig           `yaml:"storage"`
 }
 
 type ColumnConfig struct {
@@ -104,6 +106,15 @@ func (c *Config) Validate() error {
 		}
 		if input.Mode == "last_n_files" && input.LastNFiles <= 0 {
 			return fmt.Errorf("input %q with mode %q requires last_n_files > 0", input.Name, input.Mode)
+		}
+		if input.Mode == "growing_file" {
+			if input.ReplayLines < 0 {
+				return fmt.Errorf("input %q with mode %q requires replay_lines >= 0", input.Name, input.Mode)
+			}
+			if input.ReplayLines == 0 {
+				c.Inputs[idx].ReplayLines = 5
+				input.ReplayLines = 5
+			}
 		}
 		if input.Concurrency <= 0 {
 			c.Inputs[idx].Concurrency = 1
@@ -218,7 +229,7 @@ func isSupportedColumnType(value string) bool {
 
 func isSupportedMode(value string) bool {
 	switch strings.TrimSpace(value) {
-	case "all", "latest", "last_n_files":
+	case "all", "latest", "last_n_files", "growing_file":
 		return true
 	default:
 		return false

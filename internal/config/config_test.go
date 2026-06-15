@@ -213,6 +213,50 @@ func TestValidateRejectsLastNFilesWithoutCount(t *testing.T) {
 	}
 }
 
+func TestValidateDefaultsReplayLinesForGrowingFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "meteo_psda",
+				Directory:       "/tmp/meteo",
+				Mode:            "growing_file",
+				TimestampColumn: "TIMESTAMP",
+				Include:         []string{"*.dat"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].ReplayLines != 5 {
+		t.Fatalf("ReplayLines = %d, want 5", cfg.Inputs[0].ReplayLines)
+	}
+}
+
+func TestValidateRejectsNegativeReplayLinesForGrowingFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "meteo_psda",
+				Directory:       "/tmp/meteo",
+				Mode:            "growing_file",
+				ReplayLines:     -1,
+				TimestampColumn: "TIMESTAMP",
+				Include:         []string{"*.dat"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
 func TestValidateRejectsInvalidTimescaleOutput(t *testing.T) {
 	t.Parallel()
 

@@ -95,6 +95,29 @@ En ese caso el collector:
 - `all`: procesa todos los archivos matcheados
 - `latest`: procesa solo el archivo con `mtime` más reciente
 - `last_n_files`: procesa los `N` archivos con `mtime` más reciente usando `last_n_files`
+- `growing_file`: procesa solo el archivo mas reciente, persiste estado de lectura y retoma desde el ultimo offset confirmado
+
+Para archivos historicos acumulativos tipo `CR1000X`, se puede usar:
+
+```yaml
+inputs:
+  - name: meteo_psda
+    directory: /ruta/a/Radiometria
+    mode: growing_file
+    replay_lines: 5
+    state_directory: /var/lib/atamostec/file-collector/state
+    timestamp_column: TIMESTAMP
+    include:
+      - "CRx_22568_Meteo.dat"
+```
+
+En `growing_file` el collector:
+
+- guarda estado por `input + tabla destino`
+- retoma desde el ultimo `offset` confirmado despues de `commit`
+- reprocesa por defecto las ultimas `5` filas para tolerar cortes breves
+- si el archivo no cambio, no lo relee
+- si el archivo se achica o cambia de nombre, reinicia desde el comienzo
 
 `storage.outputs` soporta por ahora:
 
@@ -104,3 +127,9 @@ Opciones relevantes de `timescaledb`:
 
 - `on_conflict`: `do_update` o `do_nothing`
 - `batch_size`: techo de filas por `INSERT ... VALUES ... ON CONFLICT ...`. El collector lo reduce automaticamente si hace falta para no superar el limite de parametros de PostgreSQL. Default: `5000`
+
+Comportamientos por defecto del writer:
+
+- columnas presentes en el archivo pero ausentes en la tabla se omiten y se informan en logs
+- columnas presentes en la tabla pero ausentes en el archivo quedan en `NULL` si la tabla no define otro default
+- valores `NaN` se convierten a `NULL`

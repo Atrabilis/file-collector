@@ -3,6 +3,7 @@ package tabular
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -24,41 +25,45 @@ type ColumnSpec struct {
 }
 
 type TypedReadOptions struct {
-	Delimiter        rune
-	DecimalComma     bool
-	SkipLines        int
-	HeaderColumns    []string
-	TimestampColumn  string
+	Delimiter              rune
+	DecimalComma           bool
+	SkipLines              int
+	HeaderColumns          []string
+	TimestampColumn        string
 	TimestampSourceColumns []string
-	ColumnSpecs      map[string]ColumnSpec
-	TimestampLayouts []string
-	TimestampLocation *time.Location
+	ColumnSpecs            map[string]ColumnSpec
+	TimestampLayouts       []string
+	TimestampLocation      *time.Location
+	StartOffset            int64
+	StartLineNumber        int
 }
 
 type TypedFileSummary struct {
-	Delimiter         rune
-	Header            []string
-	RowCount          int
+	Delimiter          rune
+	Header             []string
+	RowCount           int
 	WellFormedRowCount int
-	MalformedRowCount int
-	MalformedRows     []MalformedRow
-	ParseErrorCount   int
-	ParseErrors       []ParseError
-	PreviewRows       []TypedRow
+	MalformedRowCount  int
+	MalformedRows      []MalformedRow
+	ParseErrorCount    int
+	ParseErrors        []ParseError
+	PreviewRows        []TypedRow
 }
 
 type TypedRow struct {
-	LineNumber int
-	Raw    []string
-	Values map[string]any
+	LineNumber     int
+	ByteOffset     int64
+	NextByteOffset int64
+	Raw            []string
+	Values         map[string]any
 }
 
 type ParseError struct {
-	LineNumber  int
-	ColumnName  string
+	LineNumber   int
+	ColumnName   string
 	ExpectedType ColumnType
-	Raw         string
-	Error       string
+	Raw          string
+	Error        string
 }
 
 func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (*TypedFileSummary, error) {
@@ -203,8 +208,8 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 		if len(typed.PreviewRows) < previewRows {
 			typed.PreviewRows = append(typed.PreviewRows, TypedRow{
 				LineNumber: lineNumber,
-				Raw:    raw,
-				Values: values,
+				Raw:        raw,
+				Values:     values,
 			})
 		}
 	}
@@ -223,54 +228,68 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, maxScanCapacity)
-
-	lineNumber, err := skipScannerLines(scanner, opts.SkipLines)
+	header, delimiter, err := resolveHeaderAndDelimiter(file, opts)
 	if err != nil {
 		return err
 	}
 
-	var header []string
-	delimiter := opts.Delimiter
-	if len(opts.HeaderColumns) > 0 {
-		header = append([]string(nil), opts.HeaderColumns...)
-		if delimiter == 0 {
-			sampleLine, ok, err := nextNonEmptyLine(scanner)
+	startOffset := opts.StartOffset
+	if startOffset < 0 {
+		startOffset = 0
+	}
+	if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(file)
+	lineNumber := opts.StartLineNumber
+	currentOffset := startOffset
+
+	if startOffset == 0 {
+		for skipped := 0; skipped < opts.SkipLines; {
+			_, consumed, ok, err := readLine(reader)
 			if err != nil {
 				return err
 			}
 			if !ok {
-				return fmt.Errorf("empty file")
+				return nil
 			}
 			lineNumber++
-			delimiter = DetectDelimiter(sampleLine)
-			raw := splitLine(sampleLine, delimiter)
-			if len(raw) == len(header) {
-				if err := fn(buildTypedRow(lineNumber, raw, header, opts)); err != nil {
+			currentOffset += int64(consumed)
+			skipped++
+		}
+		if len(opts.HeaderColumns) == 0 {
+			for {
+				line, consumed, ok, err := readLine(reader)
+				if err != nil {
 					return err
 				}
+				if !ok {
+					return fmt.Errorf("empty file")
+				}
+				lineNumber++
+				currentOffset += int64(consumed)
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				break
 			}
 		}
-	} else {
-		headerLine, ok, err := nextNonEmptyLine(scanner)
+	}
+
+	for {
+		lineOffset := currentOffset
+		line, consumed, ok, err := readLine(reader)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("empty file")
+			return nil
 		}
 		lineNumber++
-		if delimiter == 0 {
-			delimiter = DetectDelimiter(headerLine)
-		}
-		header = splitLine(headerLine, delimiter)
-	}
+		currentOffset += int64(consumed)
 
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -280,16 +299,88 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 			continue
 		}
 
-		if err := fn(buildTypedRow(lineNumber, raw, header, opts)); err != nil {
+		row := buildTypedRow(lineNumber, raw, header, opts)
+		row.ByteOffset = lineOffset
+		row.NextByteOffset = currentOffset
+		if err := fn(row); err != nil {
 			return err
 		}
 	}
+}
 
-	if err := scanner.Err(); err != nil {
-		return err
+func resolveHeaderAndDelimiter(file *os.File, opts TypedReadOptions) ([]string, rune, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, 0, err
 	}
 
-	return nil
+	reader := bufio.NewReader(file)
+	delimiter := opts.Delimiter
+
+	for skipped := 0; skipped < opts.SkipLines; {
+		_, _, ok, err := readLine(reader)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !ok {
+			return nil, 0, fmt.Errorf("empty file")
+		}
+		skipped++
+	}
+
+	if len(opts.HeaderColumns) > 0 {
+		header := append([]string(nil), opts.HeaderColumns...)
+		if delimiter != 0 {
+			return header, delimiter, nil
+		}
+		for {
+			line, _, ok, err := readLine(reader)
+			if err != nil {
+				return nil, 0, err
+			}
+			if !ok {
+				return nil, 0, fmt.Errorf("empty file")
+			}
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			delimiter = DetectDelimiter(line)
+			return header, delimiter, nil
+		}
+	}
+
+	for {
+		line, _, ok, err := readLine(reader)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !ok {
+			return nil, 0, fmt.Errorf("empty file")
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if delimiter == 0 {
+			delimiter = DetectDelimiter(line)
+		}
+		header := splitLine(line, delimiter)
+		return header, delimiter, nil
+	}
+}
+
+func readLine(reader *bufio.Reader) (string, int, bool, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		if err == io.EOF {
+			if line == "" {
+				return "", 0, false, nil
+			}
+			return line, len(line), true, nil
+		}
+		return "", 0, false, err
+	}
+	return line, len(line), true, nil
 }
 
 func buildTypedRow(lineNumber int, raw []string, header []string, opts TypedReadOptions) TypedRow {

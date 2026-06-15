@@ -195,6 +195,12 @@ func runReadFromConfig(configPath, inputName string, maxPreviewRows int) error {
 		fmt.Printf("INPUT %s\n", input.Name)
 		fmt.Printf("  directory: %s\n", input.Directory)
 		fmt.Printf("  mode: %s\n", input.Mode)
+		if input.Mode == "growing_file" {
+			fmt.Printf("  replay_lines: %d\n", input.ReplayLines)
+			if strings.TrimSpace(input.StateDirectory) != "" {
+				fmt.Printf("  state_directory: %s\n", input.StateDirectory)
+			}
+		}
 		fmt.Printf("  timestamp_column: %s\n", input.TimestampColumn)
 		if input.Delimiter != "" {
 			fmt.Printf("  delimiter: %q\n", input.Delimiter)
@@ -362,7 +368,7 @@ func resolveFilesFromInput(input config.Input) ([]string, error) {
 		sortFilesByModTimeDesc(files)
 	}
 
-	if input.Mode == "latest" && len(files) > 1 {
+	if (input.Mode == "latest" || input.Mode == "growing_file") && len(files) > 1 {
 		return files[:1], nil
 	}
 	if input.Mode == "last_n_files" && len(files) > input.LastNFiles {

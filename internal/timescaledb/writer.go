@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -175,6 +176,30 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 }
 
 func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, filePath string, opts tabular.TypedReadOptions, destinationColumns map[string]struct{}, primaryKeyColumns []string, result *WriteResult) error {
+	var existingState *fileResumeState
+	if input.Mode == "growing_file" {
+		state, err := loadResumeState(input, output)
+		if err != nil {
+			return fmt.Errorf("load resume state: %w", err)
+		}
+		existingState = state
+
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
+			return err
+		}
+		plan := buildResumePlan(existingState, filePath, fileInfo, input.ReplayLines)
+		if plan.SkipUnchanged {
+			fmt.Printf("  file_skipped: %s reason=unchanged\n", filepath.Base(filePath))
+			return nil
+		}
+		opts.StartOffset = plan.StartOffset
+		opts.StartLineNumber = plan.StartLineNumber
+		if plan.StartOffset > 0 {
+			fmt.Printf("  file_resume: %s offset=%d line=%d replay_lines=%d\n", filepath.Base(filePath), plan.StartOffset, plan.StartLineNumber, input.ReplayLines)
+		}
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -192,6 +217,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 		sourceColumns:             make(map[string]struct{}),
 		skippedDestinationColumns: make(map[string]struct{}),
 	}
+	checkpoints := make([]resumeCheckpoint, 0, max(1, input.ReplayLines+1))
 
 	flushBatch := func() error {
 		if batchRowCount == 0 {
@@ -269,6 +295,14 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			}
 		}
 
+		if input.Mode == "growing_file" {
+			checkpoints = append(checkpoints, resumeCheckpoint{
+				LineNumber: row.LineNumber,
+				NextOffset: row.NextByteOffset,
+			})
+			checkpoints = trimResumeCheckpoints(checkpoints, input.ReplayLines)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -281,7 +315,34 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 
 	logFileWriteStats(filePath, destinationColumns, stats)
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if input.Mode == "growing_file" {
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
+			return err
+		}
+		state := &fileResumeState{
+			InputName:           input.Name,
+			Schema:              connCfg.Schema,
+			Table:               connCfg.Table,
+			FilePath:            filePath,
+			FileSize:            fileInfo.Size(),
+			FileModTimeUnixNano: fileInfo.ModTime().UnixNano(),
+		}
+		if existingState != nil && len(checkpoints) == 0 {
+			state.Checkpoints = existingState.Checkpoints
+		} else {
+			state.Checkpoints = checkpoints
+		}
+		if err := saveResumeState(input, output, state); err != nil {
+			return fmt.Errorf("save resume state: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func loadDestinationColumns(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig) (map[string]struct{}, error) {
