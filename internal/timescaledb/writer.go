@@ -224,7 +224,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			return nil
 		}
 
-		statement := buildInsertStatement(connCfg.Schema, connCfg.Table, batchColumns, batchRowCount, output.TimescaleDB.OnConflict)
+		statement := buildInsertStatement(connCfg.Schema, connCfg.Table, batchColumns, batchRowCount, output.TimescaleDB.OnConflict, primaryKeyColumns)
 		execResult, err := tx.ExecContext(ctx, statement, batchValues...)
 		if err != nil {
 			return fmt.Errorf("exec insert batch ending at line %d: %w", batchLastLineNumber, err)
@@ -553,15 +553,22 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-func buildInsertStatement(schema, table string, columns []string, rowCount int, onConflict string) string {
+func buildInsertStatement(schema, table string, columns []string, rowCount int, onConflict string, primaryKeyColumns []string) string {
 	quotedColumns := make([]string, 0, len(columns))
 	valueGroups := make([]string, 0, rowCount)
 	assignments := make([]string, 0, len(columns))
+	primaryKeySet := make(map[string]struct{}, len(primaryKeyColumns))
+	quotedPrimaryKeyColumns := make([]string, 0, len(primaryKeyColumns))
+
+	for _, primaryKeyColumn := range primaryKeyColumns {
+		primaryKeySet[primaryKeyColumn] = struct{}{}
+		quotedPrimaryKeyColumns = append(quotedPrimaryKeyColumns, identifier.QuoteIfNeeded(primaryKeyColumn))
+	}
 
 	for _, column := range columns {
 		quoted := identifier.QuoteIfNeeded(column)
 		quotedColumns = append(quotedColumns, quoted)
-		if column == "ts" {
+		if _, isPrimaryKey := primaryKeySet[column]; isPrimaryKey {
 			continue
 		}
 		assignments = append(assignments, fmt.Sprintf("%s = EXCLUDED.%s", quoted, quoted))
@@ -576,9 +583,18 @@ func buildInsertStatement(schema, table string, columns []string, rowCount int, 
 		valueGroups = append(valueGroups, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
 	}
 
-	conflictClause := `ON CONFLICT (ts) DO NOTHING`
+	conflictTarget := strings.Join(quotedPrimaryKeyColumns, ", ")
+	if conflictTarget == "" {
+		conflictTarget = "ts"
+	}
+
+	conflictClause := fmt.Sprintf("ON CONFLICT (%s) DO NOTHING", conflictTarget)
 	if onConflict == "do_update" {
-		conflictClause = fmt.Sprintf("ON CONFLICT (ts) DO UPDATE SET %s", strings.Join(assignments, ", "))
+		if len(assignments) == 0 {
+			conflictClause = fmt.Sprintf("ON CONFLICT (%s) DO NOTHING", conflictTarget)
+		} else {
+			conflictClause = fmt.Sprintf("ON CONFLICT (%s) DO UPDATE SET %s", conflictTarget, strings.Join(assignments, ", "))
+		}
 	}
 
 	return fmt.Sprintf(

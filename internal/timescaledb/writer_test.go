@@ -235,7 +235,7 @@ func TestBuildInsertStatementQuotesNumericIdentifiers(t *testing.T) {
 		"ts",
 		"source_file",
 		"2_ve_201_v",
-	}, 2, "do_update")
+	}, 2, "do_update", []string{"ts"})
 
 	if !strings.Contains(stmt, `INSERT INTO ua.cdaq2_dc_power (ts, source_file, "2_ve_201_v") VALUES ($1, $2, $3), ($4, $5, $6)`) {
 		t.Fatalf("statement insert columns not quoted as expected: %s", stmt)
@@ -252,10 +252,28 @@ func TestBuildInsertStatementDoNothing(t *testing.T) {
 		"ts",
 		"source_file",
 		"2_ve_201_v",
-	}, 1, "do_nothing")
+	}, 1, "do_nothing", []string{"ts"})
 
 	if !strings.Contains(stmt, `ON CONFLICT (ts) DO NOTHING`) {
 		t.Fatalf("statement conflict clause not set to DO NOTHING: %s", stmt)
+	}
+}
+
+func TestBuildInsertStatementUsesCompositePrimaryKey(t *testing.T) {
+	t.Parallel()
+
+	stmt := buildInsertStatement("psda", "meteo_22568", []string{
+		"ts",
+		"source_file",
+		"source_line_number",
+		"record",
+	}, 1, "do_update", []string{"ts", "source_file", "source_line_number"})
+
+	if !strings.Contains(stmt, `ON CONFLICT (ts, source_file, source_line_number) DO UPDATE SET record = EXCLUDED.record`) {
+		t.Fatalf("statement conflict clause did not use composite primary key as expected: %s", stmt)
+	}
+	if strings.Contains(stmt, `source_file = EXCLUDED.source_file`) || strings.Contains(stmt, `source_line_number = EXCLUDED.source_line_number`) {
+		t.Fatalf("statement should not update primary key columns: %s", stmt)
 	}
 }
 
