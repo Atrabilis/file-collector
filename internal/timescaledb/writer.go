@@ -176,6 +176,10 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 }
 
 func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, filePath string, opts tabular.TypedReadOptions, destinationColumns map[string]struct{}, primaryKeyColumns []string, result *WriteResult) error {
+	opts.OnSkippedRow = func(row tabular.SkippedRow) {
+		fmt.Printf("  skipped_row: file=%s line=%d reason=%q raw=%q\n", filepath.Base(filePath), row.LineNumber, row.Reason, row.Raw)
+	}
+
 	var existingState *fileResumeState
 	if input.Mode == "growing_file" {
 		state, err := loadResumeState(input, output)

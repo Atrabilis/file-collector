@@ -36,6 +36,7 @@ type TypedReadOptions struct {
 	TimestampLocation      *time.Location
 	StartOffset            int64
 	StartLineNumber        int
+	OnSkippedRow           func(SkippedRow)
 }
 
 type TypedFileSummary struct {
@@ -64,6 +65,12 @@ type ParseError struct {
 	ExpectedType ColumnType
 	Raw          string
 	Error        string
+}
+
+type SkippedRow struct {
+	LineNumber int
+	Reason     string
+	Raw        string
 }
 
 func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (*TypedFileSummary, error) {
@@ -293,15 +300,24 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 		if line == "" {
 			continue
 		}
+		if strings.ContainsRune(line, '\x00') {
+			reportSkippedRow(opts, lineNumber, "line contains NUL bytes", line)
+			continue
+		}
 
 		raw := splitLine(line, delimiter)
 		if len(raw) != len(header) {
+			reportSkippedRow(opts, lineNumber, fmt.Sprintf("column count mismatch expected=%d actual=%d", len(header), len(raw)), line)
 			continue
 		}
 
 		row := buildTypedRow(lineNumber, raw, header, opts)
 		row.ByteOffset = lineOffset
 		row.NextByteOffset = currentOffset
+		if !rowHasParsedTimestamp(row, opts.TimestampColumn) {
+			reportSkippedRow(opts, lineNumber, fmt.Sprintf("timestamp column %q is not parsed as time", opts.TimestampColumn), line)
+			continue
+		}
 		if err := fn(row); err != nil {
 			return err
 		}
@@ -433,6 +449,29 @@ func buildTypedRow(lineNumber int, raw []string, header []string, opts TypedRead
 		Raw:        raw,
 		Values:     values,
 	}
+}
+
+func rowHasParsedTimestamp(row TypedRow, timestampColumn string) bool {
+	if timestampColumn == "" {
+		return true
+	}
+	value, ok := row.Values[timestampColumn]
+	if !ok {
+		return false
+	}
+	_, ok = value.(time.Time)
+	return ok
+}
+
+func reportSkippedRow(opts TypedReadOptions, lineNumber int, reason, raw string) {
+	if opts.OnSkippedRow == nil {
+		return
+	}
+	opts.OnSkippedRow(SkippedRow{
+		LineNumber: lineNumber,
+		Reason:     reason,
+		Raw:        raw,
+	})
 }
 
 func parseValueByType(raw string, valueType ColumnType, decimalComma bool, layouts []string, location *time.Location) (any, error) {
