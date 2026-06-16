@@ -11,6 +11,7 @@ import (
 type Input struct {
 	Name                   string                  `yaml:"name"`
 	Directory              string                  `yaml:"directory"`
+	FileType               string                  `yaml:"file_type"`
 	Mode                   string                  `yaml:"mode"`
 	LastNFiles             int                     `yaml:"last_n_files"`
 	StateDirectory         string                  `yaml:"state_directory"`
@@ -27,10 +28,22 @@ type Input struct {
 	Include                []string                `yaml:"include"`
 	Exclude                []string                `yaml:"exclude"`
 	Columns                map[string]ColumnConfig `yaml:"columns"`
+	XML                    XMLConfig               `yaml:"xml"`
 	Storage                StorageConfig           `yaml:"storage"`
 }
 
 type ColumnConfig struct {
+	Type string `yaml:"type"`
+	Path string `yaml:"path"`
+}
+
+type XMLConfig struct {
+	Fields []XMLFieldConfig `yaml:"fields"`
+}
+
+type XMLFieldConfig struct {
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
 	Type string `yaml:"type"`
 }
 
@@ -97,6 +110,13 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(input.Directory) == "" {
 			return fmt.Errorf("input %q has empty directory", input.Name)
 		}
+		if strings.TrimSpace(input.FileType) == "" {
+			c.Inputs[idx].FileType = "tabular"
+			input.FileType = "tabular"
+		}
+		if !isSupportedFileType(input.FileType) {
+			return fmt.Errorf("input %q has unsupported file_type %q", input.Name, input.FileType)
+		}
 		if strings.TrimSpace(input.Mode) == "" {
 			input.Mode = "all"
 			c.Inputs[idx].Mode = "all"
@@ -145,12 +165,30 @@ func (c *Config) Validate() error {
 		if len(input.Include) == 0 {
 			return fmt.Errorf("input %q must define at least one include glob", input.Name)
 		}
-		for columnName, column := range input.Columns {
-			if strings.TrimSpace(columnName) == "" {
-				return fmt.Errorf("input %q has empty column name override", input.Name)
+		switch input.FileType {
+		case "xml":
+			if len(input.XML.Fields) == 0 {
+				return fmt.Errorf("input %q with file_type xml must define xml.fields", input.Name)
 			}
-			if !isSupportedColumnType(column.Type) {
-				return fmt.Errorf("input %q column %q has unsupported type %q", input.Name, columnName, column.Type)
+			for fieldIdx, field := range input.XML.Fields {
+				if strings.TrimSpace(field.Name) == "" {
+					return fmt.Errorf("input %q xml.fields[%d] has empty name", input.Name, fieldIdx)
+				}
+				if strings.TrimSpace(field.Path) == "" {
+					return fmt.Errorf("input %q xml.fields[%d] has empty path", input.Name, fieldIdx)
+				}
+				if !isSupportedColumnType(field.Type) {
+					return fmt.Errorf("input %q xml.fields[%d] %q has unsupported type %q", input.Name, fieldIdx, field.Name, field.Type)
+				}
+			}
+		default:
+			for columnName, column := range input.Columns {
+				if strings.TrimSpace(columnName) == "" {
+					return fmt.Errorf("input %q has empty column name override", input.Name)
+				}
+				if !isSupportedColumnType(column.Type) {
+					return fmt.Errorf("input %q column %q has unsupported type %q", input.Name, columnName, column.Type)
+				}
 			}
 		}
 		for outputIdx, output := range input.Storage.Outputs {
@@ -220,7 +258,16 @@ func validateTimescaleDBOutput(inputName string, output Output) error {
 
 func isSupportedColumnType(value string) bool {
 	switch strings.TrimSpace(value) {
-	case "timestamp", "float64", "int64", "string", "bool":
+	case "timestamp", "float64", "int64", "string", "bool", "json", "jsonb":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedFileType(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "tabular", "columnar", "xml":
 		return true
 	default:
 		return false

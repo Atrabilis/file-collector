@@ -194,6 +194,7 @@ func runReadFromConfig(configPath, inputName string, maxPreviewRows int) error {
 	for _, input := range inputs {
 		fmt.Printf("INPUT %s\n", input.Name)
 		fmt.Printf("  directory: %s\n", input.Directory)
+		fmt.Printf("  file_type: %s\n", tabular.NormalizeFileType(input.FileType))
 		fmt.Printf("  mode: %s\n", input.Mode)
 		if input.Mode == "growing_file" {
 			fmt.Printf("  replay_lines: %d\n", input.ReplayLines)
@@ -244,9 +245,24 @@ func runReadFromConfig(configPath, inputName string, maxPreviewRows int) error {
 		}
 
 		columnSpecs := make(map[string]tabular.ColumnSpec, len(input.Columns))
-		for columnName, column := range input.Columns {
-			columnSpecs[columnName] = tabular.ColumnSpec{
-				Type: tabular.ColumnType(column.Type),
+		xmlFields := make([]tabular.XMLFieldSpec, 0, len(input.XML.Fields))
+		switch tabular.NormalizeFileType(input.FileType) {
+		case "xml":
+			for _, field := range input.XML.Fields {
+				columnSpecs[field.Name] = tabular.ColumnSpec{
+					Type: tabular.ColumnType(field.Type),
+				}
+				xmlFields = append(xmlFields, tabular.XMLFieldSpec{
+					Name: field.Name,
+					Path: field.Path,
+					Type: tabular.ColumnType(field.Type),
+				})
+			}
+		default:
+			for columnName, column := range input.Columns {
+				columnSpecs[columnName] = tabular.ColumnSpec{
+					Type: tabular.ColumnType(column.Type),
+				}
 			}
 		}
 
@@ -262,6 +278,7 @@ func runReadFromConfig(configPath, inputName string, maxPreviewRows int) error {
 
 		for _, filePath := range files {
 			summary, err := tabular.ReadTypedFileSummary(filePath, maxPreviewRows, tabular.TypedReadOptions{
+				FileType:               input.FileType,
 				Delimiter:              delimiter,
 				DecimalComma:           input.DecimalComma,
 				SkipLines:              input.SkipLines,
@@ -269,7 +286,8 @@ func runReadFromConfig(configPath, inputName string, maxPreviewRows int) error {
 				TimestampColumn:        input.TimestampColumn,
 				TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
 				ColumnSpecs:            columnSpecs,
-				TimestampLayouts:       []string{"2006_01_02 15:04:05", time.RFC3339},
+				XMLFields:              xmlFields,
+				TimestampLayouts:       timescaledb.EffectiveTimestampLayouts(input.TimestampLayouts),
 				TimestampLocation:      timestampLocation,
 			})
 			if err != nil {
@@ -279,7 +297,9 @@ func runReadFromConfig(configPath, inputName string, maxPreviewRows int) error {
 			}
 
 			fmt.Printf("FILE %s\n", filePath)
-			fmt.Printf("  delimiter: %q\n", string(summary.Delimiter))
+			if tabular.NormalizeFileType(input.FileType) != "xml" {
+				fmt.Printf("  delimiter: %q\n", string(summary.Delimiter))
+			}
 			fmt.Printf("  columns: %d\n", len(summary.Header))
 			fmt.Printf("  rows: %d\n", summary.RowCount)
 			fmt.Printf("  well_formed_rows: %d\n", summary.WellFormedRowCount)

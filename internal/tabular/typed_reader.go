@@ -25,6 +25,7 @@ type ColumnSpec struct {
 }
 
 type TypedReadOptions struct {
+	FileType               string
 	Delimiter              rune
 	DecimalComma           bool
 	SkipLines              int
@@ -32,11 +33,18 @@ type TypedReadOptions struct {
 	TimestampColumn        string
 	TimestampSourceColumns []string
 	ColumnSpecs            map[string]ColumnSpec
+	XMLFields              []XMLFieldSpec
 	TimestampLayouts       []string
 	TimestampLocation      *time.Location
 	StartOffset            int64
 	StartLineNumber        int
 	OnSkippedRow           func(SkippedRow)
+}
+
+type XMLFieldSpec struct {
+	Name string
+	Path string
+	Type ColumnType
 }
 
 type TypedFileSummary struct {
@@ -74,6 +82,9 @@ type SkippedRow struct {
 }
 
 func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (*TypedFileSummary, error) {
+	if NormalizeFileType(opts.FileType) == "xml" {
+		return readXMLFileSummary(path, previewRows, opts)
+	}
 	summary, err := ReadFileSummaryWithOptions(path, previewRows, ReadOptions{
 		Delimiter:     opts.Delimiter,
 		SkipLines:     opts.SkipLines,
@@ -229,6 +240,9 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 }
 
 func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error) error {
+	if NormalizeFileType(opts.FileType) == "xml" {
+		return forEachXMLRow(path, opts, fn)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -574,4 +588,15 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func NormalizeFileType(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "", "tabular", "columnar":
+		return "tabular"
+	case "xml":
+		return "xml"
+	default:
+		return strings.TrimSpace(strings.ToLower(value))
+	}
 }

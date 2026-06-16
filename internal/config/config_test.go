@@ -16,6 +16,7 @@ inputs:
   - name: ac_power
     directory: /tmp/power
     mode: latest
+    file_type: tabular
     timestamp_column: TimeStamp
     delimiter: ";"
     decimal_comma: true
@@ -56,6 +57,9 @@ inputs:
 	}
 	if cfg.Inputs[0].Mode != "latest" {
 		t.Fatalf("Inputs[0].Mode = %q, want %q", cfg.Inputs[0].Mode, "latest")
+	}
+	if cfg.Inputs[0].FileType != "tabular" {
+		t.Fatalf("Inputs[0].FileType = %q, want %q", cfg.Inputs[0].FileType, "tabular")
 	}
 	if cfg.Inputs[0].Delimiter != ";" {
 		t.Fatalf("Inputs[0].Delimiter = %q, want %q", cfg.Inputs[0].Delimiter, ";")
@@ -332,5 +336,54 @@ func TestValidateAllowsCustomTimescaleBatchSize(t *testing.T) {
 	}
 	if cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize != 250 {
 		t.Fatalf("BatchSize = %d, want 250", cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize)
+	}
+}
+
+func TestValidateDefaultsFileTypeToTabular(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "ac_power",
+				Directory:       "/tmp/power",
+				TimestampColumn: "TimeStamp",
+				Include:         []string{"*_ACpower.txt"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].FileType != "tabular" {
+		t.Fatalf("FileType = %q, want %q", cfg.Inputs[0].FileType, "tabular")
+	}
+}
+
+func TestValidateAllowsXMLConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "daystar_iv",
+				Directory:       "/tmp/daystar",
+				FileType:        "xml",
+				TimestampColumn: "ts",
+				Include:         []string{"*.xml"},
+				XML: XMLConfig{
+					Fields: []XMLFieldConfig{
+						{Name: "ts", Path: "Curve.Date_Time", Type: "timestamp"},
+						{Name: "guid", Path: "Curve.GUID", Type: "string"},
+						{Name: "points", Path: "Curve.Points.Point", Type: "json"},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
