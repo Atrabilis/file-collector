@@ -36,6 +36,8 @@ type TypedReadOptions struct {
 	XMLFields              []XMLFieldSpec
 	TimestampLayouts       []string
 	TimestampLocation      *time.Location
+	WebdynsunAddressColumn string
+	WebdynsunTypeColumn    string
 	StartOffset            int64
 	StartLineNumber        int
 	OnSkippedRow           func(SkippedRow)
@@ -82,8 +84,11 @@ type SkippedRow struct {
 }
 
 func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (*TypedFileSummary, error) {
-	if NormalizeFileType(opts.FileType) == "xml" {
+	switch NormalizeFileType(opts.FileType) {
+	case "xml":
 		return readXMLFileSummary(path, previewRows, opts)
+	case "webdynsun":
+		return readWebdynsunFileSummary(path, previewRows, opts)
 	}
 	summary, err := ReadFileSummaryWithOptions(path, previewRows, ReadOptions{
 		Delimiter:     opts.Delimiter,
@@ -240,8 +245,11 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 }
 
 func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error) error {
-	if NormalizeFileType(opts.FileType) == "xml" {
+	switch NormalizeFileType(opts.FileType) {
+	case "xml":
 		return forEachXMLRow(path, opts, fn)
+	case "webdynsun":
+		return forEachWebdynsunRow(path, opts, fn)
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -596,6 +604,8 @@ func NormalizeFileType(value string) string {
 		return "tabular"
 	case "xml":
 		return "xml"
+	case "webdynsun":
+		return "webdynsun"
 	default:
 		return strings.TrimSpace(strings.ToLower(value))
 	}

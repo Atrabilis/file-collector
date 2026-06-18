@@ -28,6 +28,7 @@ type Input struct {
 	Include                []string                `yaml:"include"`
 	Exclude                []string                `yaml:"exclude"`
 	Columns                map[string]ColumnConfig `yaml:"columns"`
+	Webdynsun              WebdynsunConfig         `yaml:"webdynsun"`
 	XML                    XMLConfig               `yaml:"xml"`
 	Storage                StorageConfig           `yaml:"storage"`
 }
@@ -39,6 +40,11 @@ type ColumnConfig struct {
 
 type XMLConfig struct {
 	Fields []XMLFieldConfig `yaml:"fields"`
+}
+
+type WebdynsunConfig struct {
+	AddressColumn string `yaml:"address_column"`
+	TypeColumn    string `yaml:"type_column"`
 }
 
 type XMLFieldConfig struct {
@@ -166,6 +172,13 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("input %q must define at least one include glob", input.Name)
 		}
 		switch input.FileType {
+		case "webdynsun":
+			if len(input.HeaderColumns) == 0 {
+				return fmt.Errorf("input %q with file_type webdynsun must define header_columns", input.Name)
+			}
+			if strings.TrimSpace(input.Webdynsun.AddressColumn) == "" {
+				c.Inputs[idx].Webdynsun.AddressColumn = "addr"
+			}
 		case "xml":
 			if len(input.XML.Fields) == 0 {
 				return fmt.Errorf("input %q with file_type xml must define xml.fields", input.Name)
@@ -267,7 +280,7 @@ func isSupportedColumnType(value string) bool {
 
 func isSupportedFileType(value string) bool {
 	switch strings.TrimSpace(value) {
-	case "tabular", "columnar", "xml":
+	case "tabular", "columnar", "xml", "webdynsun":
 		return true
 	default:
 		return false

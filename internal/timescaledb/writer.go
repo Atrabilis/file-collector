@@ -59,8 +59,23 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 
 	columnSpecs := make(map[string]tabular.ColumnSpec, len(input.Columns))
 	xmlFields := make([]tabular.XMLFieldSpec, 0, len(input.XML.Fields))
+	opts := tabular.TypedReadOptions{
+		FileType:               input.FileType,
+		DecimalComma:           input.DecimalComma,
+		SkipLines:              input.SkipLines,
+		HeaderColumns:          append([]string(nil), input.HeaderColumns...),
+		TimestampColumn:        input.TimestampColumn,
+		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
+		TimestampLayouts:       EffectiveTimestampLayouts(input.TimestampLayouts),
+	}
 
 	switch tabular.NormalizeFileType(input.FileType) {
+	case "webdynsun":
+		for columnName, column := range input.Columns {
+			columnSpecs[columnName] = tabular.ColumnSpec{Type: tabular.ColumnType(column.Type)}
+		}
+		opts.WebdynsunAddressColumn = input.Webdynsun.AddressColumn
+		opts.WebdynsunTypeColumn = input.Webdynsun.TypeColumn
 	case "xml":
 		for _, field := range input.XML.Fields {
 			columnSpecs[field.Name] = tabular.ColumnSpec{Type: tabular.ColumnType(field.Type)}
@@ -85,18 +100,9 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		timestampLocation = loc
 	}
 
-	opts := tabular.TypedReadOptions{
-		FileType:               input.FileType,
-		DecimalComma:           input.DecimalComma,
-		SkipLines:              input.SkipLines,
-		HeaderColumns:          append([]string(nil), input.HeaderColumns...),
-		TimestampColumn:        input.TimestampColumn,
-		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
-		ColumnSpecs:            columnSpecs,
-		XMLFields:              xmlFields,
-		TimestampLayouts:       EffectiveTimestampLayouts(input.TimestampLayouts),
-		TimestampLocation:      timestampLocation,
-	}
+	opts.ColumnSpecs = columnSpecs
+	opts.XMLFields = xmlFields
+	opts.TimestampLocation = timestampLocation
 	if input.Delimiter != "" {
 		opts.Delimiter = []rune(input.Delimiter)[0]
 	}

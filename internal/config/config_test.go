@@ -134,6 +134,30 @@ func TestValidateRejectsMissingTimestampColumn(t *testing.T) {
 	}
 }
 
+func TestValidateDefaultsWebdynsunAddressColumn(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "webdynsun_oeste",
+				Directory:       "/tmp/webdynsun",
+				FileType:        "webdynsun",
+				TimestampColumn: "ts",
+				HeaderColumns:   []string{"TIMESTAMP", "pmax"},
+				Include:         []string{"*.gz"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].Webdynsun.AddressColumn != "addr" {
+		t.Fatalf("Webdynsun.AddressColumn = %q, want %q", cfg.Inputs[0].Webdynsun.AddressColumn, "addr")
+	}
+}
+
 func TestValidateAllowsCombinedTimestampColumns(t *testing.T) {
 	t.Parallel()
 
