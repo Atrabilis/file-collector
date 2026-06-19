@@ -108,6 +108,7 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 	}
 
 	result := &WriteResult{}
+	var firstErr error
 	if input.Mode == "all" && input.Concurrency > 1 && len(files) > 1 {
 		return writeFilesConcurrently(ctx, db, connCfg, input, output, files, opts, destinationColumns, primaryKeyColumns, result)
 	}
@@ -117,10 +118,18 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		fileStartedAt := time.Now()
 		fileResult := &WriteResult{}
 		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, primaryKeyColumns, fileResult); err != nil {
-			return nil, fmt.Errorf("write %s: %w", filePath, err)
+			fmt.Printf("  file_failed: %s err=%v\n", filepath.Base(filePath), err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("write %s: %w", filePath, err)
+			}
+			continue
 		}
 		result.RowsInserted += fileResult.RowsInserted
 		fmt.Printf("  file_completed: %s rows_inserted=%d elapsed=%s\n", filepath.Base(filePath), fileResult.RowsInserted, time.Since(fileStartedAt).Round(time.Millisecond))
+	}
+
+	if firstErr != nil {
+		return result, firstErr
 	}
 
 	return result, nil
