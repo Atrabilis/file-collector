@@ -411,3 +411,104 @@ func TestValidateAllowsXMLConfig(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestValidateAllowsPrometheusTextfileMetrics(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "psda__meteo_6852",
+				Directory:       "/tmp/meteo",
+				Mode:            "growing_file",
+				TimestampColumn: "ts",
+				Include:         []string{"*.dat"},
+				PrometheusTextfile: PrometheusTextfileConfig{
+					Enabled:   true,
+					Directory: "/var/lib/node_exporter/textfile_collector",
+					Metrics: []PrometheusTextfileMetricConfig{
+						{
+							Name:                "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn:         "DNI_Avg",
+							Labels:              map[string]string{"plant": "psda", "sensor": "meteo6852"},
+							TimestampMetricName: "atamostec_radiometry_sample_timestamp_seconds",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].PrometheusTextfile.FileName != "psda__meteo_6852.prom" {
+		t.Fatalf("PrometheusTextfile.FileName = %q, want %q", cfg.Inputs[0].PrometheusTextfile.FileName, "psda__meteo_6852.prom")
+	}
+	if cfg.Inputs[0].PrometheusTextfile.Metrics[0].Type != "gauge" {
+		t.Fatalf("PrometheusTextfile.Metrics[0].Type = %q, want %q", cfg.Inputs[0].PrometheusTextfile.Metrics[0].Type, "gauge")
+	}
+}
+
+func TestValidateRejectsPrometheusTextfileMetricWithoutDirectory(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "psda__meteo_6852",
+				Directory:       "/tmp/meteo",
+				TimestampColumn: "ts",
+				Include:         []string{"*.dat"},
+				PrometheusTextfile: PrometheusTextfileConfig{
+					Enabled: true,
+					Metrics: []PrometheusTextfileMetricConfig{
+						{
+							Name:        "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn: "DNI_Avg",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateRejectsDuplicatePrometheusTextfileMetricSignature(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "psda__meteo_6852",
+				Directory:       "/tmp/meteo",
+				TimestampColumn: "ts",
+				Include:         []string{"*.dat"},
+				PrometheusTextfile: PrometheusTextfileConfig{
+					Enabled:   true,
+					Directory: "/var/lib/node_exporter/textfile_collector",
+					Metrics: []PrometheusTextfileMetricConfig{
+						{
+							Name:        "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn: "DNI_Avg",
+							Labels:      map[string]string{"plant": "psda"},
+						},
+						{
+							Name:        "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn: "DNI_Max",
+							Labels:      map[string]string{"plant": "psda"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}

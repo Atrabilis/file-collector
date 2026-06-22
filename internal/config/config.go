@@ -3,34 +3,37 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Input struct {
-	Name                   string                  `yaml:"name"`
-	Directory              string                  `yaml:"directory"`
-	FileType               string                  `yaml:"file_type"`
-	Mode                   string                  `yaml:"mode"`
-	LastNFiles             int                     `yaml:"last_n_files"`
-	StateDirectory         string                  `yaml:"state_directory"`
-	ReplayLines            int                     `yaml:"replay_lines"`
-	Concurrency            int                     `yaml:"concurrency"`
-	SkipLines              int                     `yaml:"skip_lines"`
-	HeaderColumns          []string                `yaml:"header_columns"`
-	TimestampColumn        string                  `yaml:"timestamp_column"`
-	TimestampSourceColumns []string                `yaml:"timestamp_source_columns"`
-	TimestampLayouts       []string                `yaml:"timestamp_layouts"`
-	TimestampTimezone      string                  `yaml:"timestamp_timezone"`
-	Delimiter              string                  `yaml:"delimiter"`
-	DecimalComma           bool                    `yaml:"decimal_comma"`
-	Include                []string                `yaml:"include"`
-	Exclude                []string                `yaml:"exclude"`
-	Columns                map[string]ColumnConfig `yaml:"columns"`
-	Webdynsun              WebdynsunConfig         `yaml:"webdynsun"`
-	XML                    XMLConfig               `yaml:"xml"`
-	Storage                StorageConfig           `yaml:"storage"`
+	Name                   string                   `yaml:"name"`
+	Directory              string                   `yaml:"directory"`
+	FileType               string                   `yaml:"file_type"`
+	Mode                   string                   `yaml:"mode"`
+	LastNFiles             int                      `yaml:"last_n_files"`
+	StateDirectory         string                   `yaml:"state_directory"`
+	ReplayLines            int                      `yaml:"replay_lines"`
+	Concurrency            int                      `yaml:"concurrency"`
+	SkipLines              int                      `yaml:"skip_lines"`
+	HeaderColumns          []string                 `yaml:"header_columns"`
+	TimestampColumn        string                   `yaml:"timestamp_column"`
+	TimestampSourceColumns []string                 `yaml:"timestamp_source_columns"`
+	TimestampLayouts       []string                 `yaml:"timestamp_layouts"`
+	TimestampTimezone      string                   `yaml:"timestamp_timezone"`
+	Delimiter              string                   `yaml:"delimiter"`
+	DecimalComma           bool                     `yaml:"decimal_comma"`
+	Include                []string                 `yaml:"include"`
+	Exclude                []string                 `yaml:"exclude"`
+	Columns                map[string]ColumnConfig  `yaml:"columns"`
+	Webdynsun              WebdynsunConfig          `yaml:"webdynsun"`
+	XML                    XMLConfig                `yaml:"xml"`
+	Storage                StorageConfig            `yaml:"storage"`
+	PrometheusTextfile     PrometheusTextfileConfig `yaml:"prometheus_textfile"`
 }
 
 type ColumnConfig struct {
@@ -82,9 +85,29 @@ type TimescaleDBOutputConfig struct {
 	BatchSize   int    `yaml:"batch_size"`
 }
 
+type PrometheusTextfileConfig struct {
+	Enabled   bool                             `yaml:"enabled"`
+	Directory string                           `yaml:"directory"`
+	FileName  string                           `yaml:"file_name"`
+	Metrics   []PrometheusTextfileMetricConfig `yaml:"metrics"`
+}
+
+type PrometheusTextfileMetricConfig struct {
+	Name                string            `yaml:"name"`
+	Help                string            `yaml:"help"`
+	Type                string            `yaml:"type"`
+	ValueColumn         string            `yaml:"value_column"`
+	Labels              map[string]string `yaml:"labels"`
+	TimestampMetricName string            `yaml:"timestamp_metric_name"`
+	TimestampMetricHelp string            `yaml:"timestamp_metric_help"`
+}
+
 type Config struct {
 	Inputs []Input `yaml:"inputs"`
 }
+
+var prometheusMetricNameRE = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+var prometheusLabelNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -232,6 +255,9 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+		if err := validatePrometheusTextfile(&c.Inputs[idx]); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -312,4 +338,86 @@ func isSupportedOnConflict(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validatePrometheusTextfile(input *Input) error {
+	cfg := &input.PrometheusTextfile
+	if !cfg.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.Directory) == "" {
+		return fmt.Errorf("input %q prometheus_textfile requires directory", input.Name)
+	}
+	if strings.TrimSpace(cfg.FileName) == "" {
+		cfg.FileName = input.Name + ".prom"
+	}
+	if len(cfg.Metrics) == 0 {
+		return fmt.Errorf("input %q prometheus_textfile requires at least one metric", input.Name)
+	}
+
+	seen := make(map[string]struct{}, len(cfg.Metrics))
+	for metricIdx := range cfg.Metrics {
+		metric := &cfg.Metrics[metricIdx]
+		if strings.TrimSpace(metric.Name) == "" {
+			return fmt.Errorf("input %q prometheus_textfile metric %d has empty name", input.Name, metricIdx)
+		}
+		if !prometheusMetricNameRE.MatchString(metric.Name) {
+			return fmt.Errorf("input %q prometheus_textfile metric %q has invalid name", input.Name, metric.Name)
+		}
+		if strings.TrimSpace(metric.Type) == "" {
+			metric.Type = "gauge"
+		}
+		if strings.TrimSpace(metric.Type) != "gauge" {
+			return fmt.Errorf("input %q prometheus_textfile metric %q has unsupported type %q", input.Name, metric.Name, metric.Type)
+		}
+		if strings.TrimSpace(metric.ValueColumn) == "" {
+			return fmt.Errorf("input %q prometheus_textfile metric %q requires value_column", input.Name, metric.Name)
+		}
+		for labelName, labelValue := range metric.Labels {
+			if strings.TrimSpace(labelName) == "" {
+				return fmt.Errorf("input %q prometheus_textfile metric %q has empty label name", input.Name, metric.Name)
+			}
+			if !prometheusLabelNameRE.MatchString(labelName) {
+				return fmt.Errorf("input %q prometheus_textfile metric %q has invalid label name %q", input.Name, metric.Name, labelName)
+			}
+			if strings.TrimSpace(labelValue) == "" {
+				return fmt.Errorf("input %q prometheus_textfile metric %q label %q has empty value", input.Name, metric.Name, labelName)
+			}
+		}
+		signature := metric.Name + "|" + labelsSignature(metric.Labels)
+		if _, exists := seen[signature]; exists {
+			return fmt.Errorf("input %q prometheus_textfile defines duplicate metric %q with identical labels", input.Name, metric.Name)
+		}
+		seen[signature] = struct{}{}
+
+		if strings.TrimSpace(metric.TimestampMetricName) == "" {
+			continue
+		}
+		if !prometheusMetricNameRE.MatchString(metric.TimestampMetricName) {
+			return fmt.Errorf("input %q prometheus_textfile metric %q has invalid timestamp_metric_name %q", input.Name, metric.Name, metric.TimestampMetricName)
+		}
+		tsSignature := metric.TimestampMetricName + "|" + labelsSignature(metric.Labels)
+		if _, exists := seen[tsSignature]; exists {
+			return fmt.Errorf("input %q prometheus_textfile defines duplicate metric %q with identical labels", input.Name, metric.TimestampMetricName)
+		}
+		seen[tsSignature] = struct{}{}
+	}
+
+	return nil
+}
+
+func labelsSignature(labels map[string]string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+labels[key])
+	}
+	return strings.Join(parts, ",")
 }

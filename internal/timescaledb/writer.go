@@ -15,6 +15,7 @@ import (
 
 	"github.com/atamostec/file-collector/internal/config"
 	"github.com/atamostec/file-collector/internal/identifier"
+	"github.com/atamostec/file-collector/internal/promtextfile"
 	"github.com/atamostec/file-collector/internal/tabular"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -250,6 +251,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 		skippedDestinationColumns: make(map[string]struct{}),
 	}
 	checkpoints := make([]resumeCheckpoint, 0, max(1, input.ReplayLines+1))
+	var latestRow *tabular.TypedRow
 
 	flushBatch := func() error {
 		if batchRowCount == 0 {
@@ -334,6 +336,8 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			})
 			checkpoints = trimResumeCheckpoints(checkpoints, input.ReplayLines)
 		}
+		rowCopy := row
+		latestRow = &rowCopy
 
 		return nil
 	})
@@ -349,6 +353,12 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+
+	if latestRow != nil && input.PrometheusTextfile.Enabled {
+		if err := promtextfile.ExportInputMetrics(input, *latestRow); err != nil {
+			return fmt.Errorf("export prometheus textfile: %w", err)
+		}
 	}
 
 	if input.Mode == "growing_file" {
