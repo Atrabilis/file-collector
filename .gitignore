@@ -3,3 +3,4 @@ sql/
 *.out
 *.log
 dist/*
+bin/
