@@ -123,6 +123,42 @@ En `growing_file` el collector:
 
 - `timescaledb`: destino PostgreSQL/TimescaleDB con valores directos o vía variables de entorno
 
+Adicionalmente, cada `input` puede exportar el ultimo valor procesado como metricas Prometheus usando el `textfile collector` de `node_exporter`:
+
+```yaml
+inputs:
+  - name: psda__meteo_6857
+    directory: /mnt/ALMACENAMIENTO/ATAMOSTEC/Data/Radiometria
+    mode: growing_file
+    timestamp_column: ts
+    timestamp_source_columns:
+      - TIMESTAMP
+    timestamp_layouts:
+      - "2006-01-02 15:04:05"
+    include:
+      - "CRx_6857_Meteo.dat"
+    prometheus_textfile:
+      enabled: true
+      directory: /var/lib/node_exporter/textfile_collector
+      file_name: psda__meteo_6857.prom
+      metrics:
+        - name: atamostec_radiometry_dni_avg_watts_per_square_meter
+          help: Latest DNI average from file-collector.
+          value_column: DNI_Avg
+          labels:
+            plant: psda
+            filename: CRx_6857_Meteo.dat
+          timestamp_metric_name: atamostec_radiometry_sample_timestamp_seconds
+          timestamp_metric_help: Timestamp of the latest source sample.
+```
+
+En ese modo el collector:
+
+- toma la ultima fila procesada exitosamente del `input`
+- reconstruye el archivo `.prom` completo en cada refresh
+- reemplaza el archivo de forma atomica, sin `append`
+- deja desaparecer metricas obsoletas simplemente dejando de escribirlas
+
 Opciones relevantes de `timescaledb`:
 
 - `on_conflict`: `do_update` o `do_nothing`

@@ -15,6 +15,7 @@ import (
 
 	"github.com/atamostec/file-collector/internal/config"
 	"github.com/atamostec/file-collector/internal/identifier"
+	"github.com/atamostec/file-collector/internal/promtextfile"
 	"github.com/atamostec/file-collector/internal/tabular"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -58,8 +59,37 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 	}
 
 	columnSpecs := make(map[string]tabular.ColumnSpec, len(input.Columns))
-	for columnName, column := range input.Columns {
-		columnSpecs[columnName] = tabular.ColumnSpec{Type: tabular.ColumnType(column.Type)}
+	xmlFields := make([]tabular.XMLFieldSpec, 0, len(input.XML.Fields))
+	opts := tabular.TypedReadOptions{
+		FileType:               input.FileType,
+		DecimalComma:           input.DecimalComma,
+		SkipLines:              input.SkipLines,
+		HeaderColumns:          append([]string(nil), input.HeaderColumns...),
+		TimestampColumn:        input.TimestampColumn,
+		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
+		TimestampLayouts:       EffectiveTimestampLayouts(input.TimestampLayouts),
+	}
+
+	switch tabular.NormalizeFileType(input.FileType) {
+	case "webdynsun":
+		for columnName, column := range input.Columns {
+			columnSpecs[columnName] = tabular.ColumnSpec{Type: tabular.ColumnType(column.Type)}
+		}
+		opts.WebdynsunAddressColumn = input.Webdynsun.AddressColumn
+		opts.WebdynsunTypeColumn = input.Webdynsun.TypeColumn
+	case "xml":
+		for _, field := range input.XML.Fields {
+			columnSpecs[field.Name] = tabular.ColumnSpec{Type: tabular.ColumnType(field.Type)}
+			xmlFields = append(xmlFields, tabular.XMLFieldSpec{
+				Name: field.Name,
+				Path: field.Path,
+				Type: tabular.ColumnType(field.Type),
+			})
+		}
+	default:
+		for columnName, column := range input.Columns {
+			columnSpecs[columnName] = tabular.ColumnSpec{Type: tabular.ColumnType(column.Type)}
+		}
 	}
 
 	var timestampLocation *time.Location
@@ -71,24 +101,15 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		timestampLocation = loc
 	}
 
-	opts := tabular.TypedReadOptions{
-		DecimalComma:           input.DecimalComma,
-		SkipLines:              input.SkipLines,
-		HeaderColumns:          append([]string(nil), input.HeaderColumns...),
-		TimestampColumn:        input.TimestampColumn,
-		TimestampSourceColumns: append([]string(nil), input.TimestampSourceColumns...),
-		ColumnSpecs:            columnSpecs,
-		TimestampLayouts:       []string{"2006_01_02 15:04:05", time.RFC3339},
-		TimestampLocation:      timestampLocation,
-	}
-	if len(input.TimestampLayouts) > 0 {
-		opts.TimestampLayouts = append([]string(nil), input.TimestampLayouts...)
-	}
+	opts.ColumnSpecs = columnSpecs
+	opts.XMLFields = xmlFields
+	opts.TimestampLocation = timestampLocation
 	if input.Delimiter != "" {
 		opts.Delimiter = []rune(input.Delimiter)[0]
 	}
 
 	result := &WriteResult{}
+	var firstErr error
 	if input.Mode == "all" && input.Concurrency > 1 && len(files) > 1 {
 		return writeFilesConcurrently(ctx, db, connCfg, input, output, files, opts, destinationColumns, primaryKeyColumns, result)
 	}
@@ -98,10 +119,18 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		fileStartedAt := time.Now()
 		fileResult := &WriteResult{}
 		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, primaryKeyColumns, fileResult); err != nil {
-			return nil, fmt.Errorf("write %s: %w", filePath, err)
+			fmt.Printf("  file_failed: %s err=%v\n", filepath.Base(filePath), err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("write %s: %w", filePath, err)
+			}
+			continue
 		}
 		result.RowsInserted += fileResult.RowsInserted
 		fmt.Printf("  file_completed: %s rows_inserted=%d elapsed=%s\n", filepath.Base(filePath), fileResult.RowsInserted, time.Since(fileStartedAt).Round(time.Millisecond))
+	}
+
+	if firstErr != nil {
+		return result, firstErr
 	}
 
 	return result, nil
@@ -222,6 +251,7 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 		skippedDestinationColumns: make(map[string]struct{}),
 	}
 	checkpoints := make([]resumeCheckpoint, 0, max(1, input.ReplayLines+1))
+	var latestRow *tabular.TypedRow
 
 	flushBatch := func() error {
 		if batchRowCount == 0 {
@@ -306,6 +336,8 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 			})
 			checkpoints = trimResumeCheckpoints(checkpoints, input.ReplayLines)
 		}
+		rowCopy := row
+		latestRow = &rowCopy
 
 		return nil
 	})
@@ -321,6 +353,12 @@ func writeSingleFile(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig,
 
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+
+	if latestRow != nil && input.PrometheusTextfile.Enabled {
+		if err := promtextfile.ExportInputMetrics(input, *latestRow); err != nil {
+			return fmt.Errorf("export prometheus textfile: %w", err)
+		}
 	}
 
 	if input.Mode == "growing_file" {
@@ -636,6 +674,13 @@ func sameColumns(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func EffectiveTimestampLayouts(layouts []string) []string {
+	if len(layouts) > 0 {
+		return append([]string(nil), layouts...)
+	}
+	return []string{"2006_01_02 15:04:05", time.RFC3339}
 }
 
 func sortedKeys(values map[string]any) []string {
