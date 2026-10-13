@@ -16,6 +16,7 @@ inputs:
   - name: ac_power
     directory: /tmp/power
     mode: latest
+    file_type: tabular
     timestamp_column: TimeStamp
     delimiter: ";"
     decimal_comma: true
@@ -56,6 +57,9 @@ inputs:
 	}
 	if cfg.Inputs[0].Mode != "latest" {
 		t.Fatalf("Inputs[0].Mode = %q, want %q", cfg.Inputs[0].Mode, "latest")
+	}
+	if cfg.Inputs[0].FileType != "tabular" {
+		t.Fatalf("Inputs[0].FileType = %q, want %q", cfg.Inputs[0].FileType, "tabular")
 	}
 	if cfg.Inputs[0].Delimiter != ";" {
 		t.Fatalf("Inputs[0].Delimiter = %q, want %q", cfg.Inputs[0].Delimiter, ";")
@@ -127,6 +131,30 @@ func TestValidateRejectsMissingTimestampColumn(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateDefaultsWebdynsunAddressColumn(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "webdynsun_oeste",
+				Directory:       "/tmp/webdynsun",
+				FileType:        "webdynsun",
+				TimestampColumn: "ts",
+				HeaderColumns:   []string{"TIMESTAMP", "pmax"},
+				Include:         []string{"*.gz"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].Webdynsun.AddressColumn != "addr" {
+		t.Fatalf("Webdynsun.AddressColumn = %q, want %q", cfg.Inputs[0].Webdynsun.AddressColumn, "addr")
 	}
 }
 
@@ -332,5 +360,155 @@ func TestValidateAllowsCustomTimescaleBatchSize(t *testing.T) {
 	}
 	if cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize != 250 {
 		t.Fatalf("BatchSize = %d, want 250", cfg.Inputs[0].Storage.Outputs[0].TimescaleDB.BatchSize)
+	}
+}
+
+func TestValidateDefaultsFileTypeToTabular(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "ac_power",
+				Directory:       "/tmp/power",
+				TimestampColumn: "TimeStamp",
+				Include:         []string{"*_ACpower.txt"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].FileType != "tabular" {
+		t.Fatalf("FileType = %q, want %q", cfg.Inputs[0].FileType, "tabular")
+	}
+}
+
+func TestValidateAllowsXMLConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "daystar_iv",
+				Directory:       "/tmp/daystar",
+				FileType:        "xml",
+				TimestampColumn: "ts",
+				Include:         []string{"*.xml"},
+				XML: XMLConfig{
+					Fields: []XMLFieldConfig{
+						{Name: "ts", Path: "Curve.Date_Time", Type: "timestamp"},
+						{Name: "guid", Path: "Curve.GUID", Type: "string"},
+						{Name: "points", Path: "Curve.Points.Point", Type: "json"},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateAllowsPrometheusTextfileMetrics(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "psda__meteo_6852",
+				Directory:       "/tmp/meteo",
+				Mode:            "growing_file",
+				TimestampColumn: "ts",
+				Include:         []string{"*.dat"},
+				PrometheusTextfile: PrometheusTextfileConfig{
+					Enabled:   true,
+					Directory: "/var/lib/node_exporter/textfile_collector",
+					Metrics: []PrometheusTextfileMetricConfig{
+						{
+							Name:                "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn:         "DNI_Avg",
+							Labels:              map[string]string{"plant": "psda", "sensor": "meteo6852"},
+							TimestampMetricName: "atamostec_radiometry_sample_timestamp_seconds",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.Inputs[0].PrometheusTextfile.FileName != "psda__meteo_6852.prom" {
+		t.Fatalf("PrometheusTextfile.FileName = %q, want %q", cfg.Inputs[0].PrometheusTextfile.FileName, "psda__meteo_6852.prom")
+	}
+	if cfg.Inputs[0].PrometheusTextfile.Metrics[0].Type != "gauge" {
+		t.Fatalf("PrometheusTextfile.Metrics[0].Type = %q, want %q", cfg.Inputs[0].PrometheusTextfile.Metrics[0].Type, "gauge")
+	}
+}
+
+func TestValidateRejectsPrometheusTextfileMetricWithoutDirectory(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "psda__meteo_6852",
+				Directory:       "/tmp/meteo",
+				TimestampColumn: "ts",
+				Include:         []string{"*.dat"},
+				PrometheusTextfile: PrometheusTextfileConfig{
+					Enabled: true,
+					Metrics: []PrometheusTextfileMetricConfig{
+						{
+							Name:        "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn: "DNI_Avg",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
+	}
+}
+
+func TestValidateRejectsDuplicatePrometheusTextfileMetricSignature(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Inputs: []Input{
+			{
+				Name:            "psda__meteo_6852",
+				Directory:       "/tmp/meteo",
+				TimestampColumn: "ts",
+				Include:         []string{"*.dat"},
+				PrometheusTextfile: PrometheusTextfileConfig{
+					Enabled:   true,
+					Directory: "/var/lib/node_exporter/textfile_collector",
+					Metrics: []PrometheusTextfileMetricConfig{
+						{
+							Name:        "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn: "DNI_Avg",
+							Labels:      map[string]string{"plant": "psda"},
+						},
+						{
+							Name:        "atamostec_radiometry_dni_avg_watts_per_square_meter",
+							ValueColumn: "DNI_Max",
+							Labels:      map[string]string{"plant": "psda"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected error, got nil")
 	}
 }

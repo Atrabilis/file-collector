@@ -2,3 +2,5 @@ tmp/
 sql/
 *.out
 *.log
+dist/*
+bin/

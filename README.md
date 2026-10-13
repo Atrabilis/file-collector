@@ -119,13 +119,51 @@ En `growing_file` el collector:
 - si el archivo no cambio, no lo relee
 - si el archivo se achica o cambia de nombre, reinicia desde el comienzo
 
+**Ultima linea incompleta**: el archivo mas reciente de cada corrida (el que puede seguir creciendo o estar descargandose, p. ej. por `lftp ... get -c`) no se lee hasta su ultimo `\n`: una linea sin salto de linea final se deja sin consumir y se toma completa en una corrida posterior (se registra como `skipped_row ... unterminated last line held`). Asi `on_conflict: do_nothing` no puede dejar un valor truncado para siempre. Los archivos anteriores (cerrados) se leen completos.
+
 `storage.outputs` soporta por ahora:
 
 - `timescaledb`: destino PostgreSQL/TimescaleDB con valores directos o vía variables de entorno
 
+Adicionalmente, cada `input` puede exportar el ultimo valor procesado como metricas Prometheus usando el `textfile collector` de `node_exporter`:
+
+```yaml
+inputs:
+  - name: psda__meteo_6857
+    directory: /mnt/ALMACENAMIENTO/ATAMOSTEC/Data/Radiometria
+    mode: growing_file
+    timestamp_column: ts
+    timestamp_source_columns:
+      - TIMESTAMP
+    timestamp_layouts:
+      - "2006-01-02 15:04:05"
+    include:
+      - "CRx_6857_Meteo.dat"
+    prometheus_textfile:
+      enabled: true
+      directory: /var/lib/node_exporter/textfile_collector
+      file_name: psda__meteo_6857.prom
+      metrics:
+        - name: atamostec_radiometry_dni_avg_watts_per_square_meter
+          help: Latest DNI average from file-collector.
+          value_column: DNI_Avg
+          labels:
+            plant: psda
+            filename: CRx_6857_Meteo.dat
+          timestamp_metric_name: atamostec_radiometry_sample_timestamp_seconds
+          timestamp_metric_help: Timestamp of the latest source sample.
+```
+
+En ese modo el collector:
+
+- toma la ultima fila procesada exitosamente del `input`
+- reconstruye el archivo `.prom` completo en cada refresh
+- reemplaza el archivo de forma atomica, sin `append`
+- deja desaparecer metricas obsoletas simplemente dejando de escribirlas
+
 Opciones relevantes de `timescaledb`:
 
-- `on_conflict`: `do_update` o `do_nothing`
+- `on_conflict`: `do_update` o `do_nothing`. **Por defecto es `do_update`**, que reescribe todas las columnas de cada fila existente sin comparar (con `last_n_files` y archivos diarios eso reescribe en cada ciclo todas las filas de los archivos leidos). Para archivos de logger que solo crecen usar `do_nothing`: los reintentos siguen siendo idempotentes y no se reescribe nada.
 - `batch_size`: techo de filas por `INSERT ... VALUES ... ON CONFLICT ...`. El collector lo reduce automaticamente si hace falta para no superar el limite de parametros de PostgreSQL. Default: `5000`
 
 Comportamientos por defecto del writer:

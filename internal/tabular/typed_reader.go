@@ -25,6 +25,7 @@ type ColumnSpec struct {
 }
 
 type TypedReadOptions struct {
+	FileType               string
 	Delimiter              rune
 	DecimalComma           bool
 	SkipLines              int
@@ -32,11 +33,27 @@ type TypedReadOptions struct {
 	TimestampColumn        string
 	TimestampSourceColumns []string
 	ColumnSpecs            map[string]ColumnSpec
+	XMLFields              []XMLFieldSpec
 	TimestampLayouts       []string
 	TimestampLocation      *time.Location
+	WebdynsunAddressColumn string
+	WebdynsunTypeColumn    string
 	StartOffset            int64
 	StartLineNumber        int
 	OnSkippedRow           func(SkippedRow)
+
+	// HoldUnterminatedLastLine leaves a final line that does not end in '\n' unread (its bytes are not
+	// consumed and no row is emitted). Use it for the file that may still be growing or being transferred
+	// (e.g. by lftp with "get -c"): a line cut in the middle of its last field still has the right number
+	// of columns and would otherwise be stored with a truncated value. The line is picked up complete on
+	// a later run.
+	HoldUnterminatedLastLine bool
+}
+
+type XMLFieldSpec struct {
+	Name string
+	Path string
+	Type ColumnType
 }
 
 type TypedFileSummary struct {
@@ -74,6 +91,12 @@ type SkippedRow struct {
 }
 
 func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (*TypedFileSummary, error) {
+	switch NormalizeFileType(opts.FileType) {
+	case "xml":
+		return readXMLFileSummary(path, previewRows, opts)
+	case "webdynsun":
+		return readWebdynsunFileSummary(path, previewRows, opts)
+	}
 	summary, err := ReadFileSummaryWithOptions(path, previewRows, ReadOptions{
 		Delimiter:     opts.Delimiter,
 		SkipLines:     opts.SkipLines,
@@ -229,6 +252,12 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 }
 
 func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error) error {
+	switch NormalizeFileType(opts.FileType) {
+	case "xml":
+		return forEachXMLRow(path, opts, fn)
+	case "webdynsun":
+		return forEachWebdynsunRow(path, opts, fn)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -291,6 +320,10 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 			return err
 		}
 		if !ok {
+			return nil
+		}
+		if opts.HoldUnterminatedLastLine && !strings.HasSuffix(line, "\n") {
+			reportSkippedRow(opts, lineNumber+1, "unterminated last line held until the file is complete", strings.TrimSpace(line))
 			return nil
 		}
 		lineNumber++
@@ -574,4 +607,17 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func NormalizeFileType(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "", "tabular", "columnar":
+		return "tabular"
+	case "xml":
+		return "xml"
+	case "webdynsun":
+		return "webdynsun"
+	default:
+		return strings.TrimSpace(strings.ToLower(value))
+	}
 }
