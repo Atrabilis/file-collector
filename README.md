@@ -119,6 +119,8 @@ En `growing_file` el collector:
 - si el archivo no cambio, no lo relee
 - si el archivo se achica o cambia de nombre, reinicia desde el comienzo
 
+**Ultima linea incompleta**: el archivo mas reciente de cada corrida (el que puede seguir creciendo o estar descargandose, p. ej. por `lftp ... get -c`) no se lee hasta su ultimo `\n`: una linea sin salto de linea final se deja sin consumir y se toma completa en una corrida posterior (se registra como `skipped_row ... unterminated last line held`). Asi `on_conflict: do_nothing` no puede dejar un valor truncado para siempre. Los archivos anteriores (cerrados) se leen completos.
+
 `storage.outputs` soporta por ahora:
 
 - `timescaledb`: destino PostgreSQL/TimescaleDB con valores directos o vía variables de entorno
@@ -161,7 +163,7 @@ En ese modo el collector:
 
 Opciones relevantes de `timescaledb`:
 
-- `on_conflict`: `do_update` o `do_nothing`
+- `on_conflict`: `do_update` o `do_nothing`. **Por defecto es `do_update`**, que reescribe todas las columnas de cada fila existente sin comparar (con `last_n_files` y archivos diarios eso reescribe en cada ciclo todas las filas de los archivos leidos). Para archivos de logger que solo crecen usar `do_nothing`: los reintentos siguen siendo idempotentes y no se reescribe nada.
 - `batch_size`: techo de filas por `INSERT ... VALUES ... ON CONFLICT ...`. El collector lo reduce automaticamente si hace falta para no superar el limite de parametros de PostgreSQL. Default: `5000`
 
 Comportamientos por defecto del writer:

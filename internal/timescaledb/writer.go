@@ -110,6 +110,7 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 
 	result := &WriteResult{}
 	var firstErr error
+	growingFile := newestFile(files)
 	if input.Mode == "all" && input.Concurrency > 1 && len(files) > 1 {
 		return writeFilesConcurrently(ctx, db, connCfg, input, output, files, opts, destinationColumns, primaryKeyColumns, result)
 	}
@@ -118,7 +119,9 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 		fmt.Printf("  file_started: %s\n", filepath.Base(filePath))
 		fileStartedAt := time.Now()
 		fileResult := &WriteResult{}
-		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, primaryKeyColumns, fileResult); err != nil {
+		fileOpts := opts
+		fileOpts.HoldUnterminatedLastLine = filePath == growingFile
+		if err := writeSingleFile(ctx, db, connCfg, input, output, filePath, fileOpts, destinationColumns, primaryKeyColumns, fileResult); err != nil {
 			fmt.Printf("  file_failed: %s err=%v\n", filepath.Base(filePath), err)
 			if firstErr == nil {
 				firstErr = fmt.Errorf("write %s: %w", filePath, err)
@@ -137,6 +140,7 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 }
 
 func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *ConnectionConfig, input config.Input, output config.Output, files []string, opts tabular.TypedReadOptions, destinationColumns map[string]struct{}, primaryKeyColumns []string, result *WriteResult) (*WriteResult, error) {
+	growingFile := newestFile(files)
 	workerCount := input.Concurrency
 	if workerCount > len(files) {
 		workerCount = len(files)
@@ -162,7 +166,9 @@ func writeFilesConcurrently(ctx context.Context, db *sql.DB, connCfg *Connection
 			for filePath := range fileCh {
 				fileStartedAt := time.Now()
 				singleResult := &WriteResult{}
-				err := writeSingleFile(ctx, db, connCfg, input, output, filePath, opts, destinationColumns, primaryKeyColumns, singleResult)
+				fileOpts := opts
+				fileOpts.HoldUnterminatedLastLine = filePath == growingFile
+				err := writeSingleFile(ctx, db, connCfg, input, output, filePath, fileOpts, destinationColumns, primaryKeyColumns, singleResult)
 				outcomeCh <- writeOutcome{
 					filePath:     filePath,
 					rowsInserted: singleResult.RowsInserted,
@@ -690,4 +696,22 @@ func sortedKeys(values map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// newestFile returns the file with the most recent modification time: the one that may still be growing
+// (or being transferred). Older files are closed, so a missing final newline there is accepted as is.
+func newestFile(files []string) string {
+	newest := ""
+	var newestTime time.Time
+	for _, filePath := range files {
+		info, err := os.Stat(filePath)
+		if err != nil {
+			continue
+		}
+		if newest == "" || info.ModTime().After(newestTime) {
+			newest = filePath
+			newestTime = info.ModTime()
+		}
+	}
+	return newest
 }

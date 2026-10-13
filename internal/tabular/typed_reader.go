@@ -41,6 +41,13 @@ type TypedReadOptions struct {
 	StartOffset            int64
 	StartLineNumber        int
 	OnSkippedRow           func(SkippedRow)
+
+	// HoldUnterminatedLastLine leaves a final line that does not end in '\n' unread (its bytes are not
+	// consumed and no row is emitted). Use it for the file that may still be growing or being transferred
+	// (e.g. by lftp with "get -c"): a line cut in the middle of its last field still has the right number
+	// of columns and would otherwise be stored with a truncated value. The line is picked up complete on
+	// a later run.
+	HoldUnterminatedLastLine bool
 }
 
 type XMLFieldSpec struct {
@@ -313,6 +320,10 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 			return err
 		}
 		if !ok {
+			return nil
+		}
+		if opts.HoldUnterminatedLastLine && !strings.HasSuffix(line, "\n") {
+			reportSkippedRow(opts, lineNumber+1, "unterminated last line held until the file is complete", strings.TrimSpace(line))
 			return nil
 		}
 		lineNumber++
