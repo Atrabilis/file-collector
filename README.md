@@ -171,3 +171,7 @@ Comportamientos por defecto del writer:
 - columnas presentes en el archivo pero ausentes en la tabla se omiten y se informan en logs
 - columnas presentes en la tabla pero ausentes en el archivo quedan en `NULL` si la tabla no define otro default
 - valores `NaN` se convierten a `NULL`
+
+## License
+
+MIT. See [LICENSE](LICENSE).
