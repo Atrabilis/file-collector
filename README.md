@@ -172,6 +172,29 @@ Comportamientos por defecto del writer:
 - columnas presentes en la tabla pero ausentes en el archivo quedan en `NULL` si la tabla no define otro default
 - valores `NaN` se convierten a `NULL`
 
+## Pruebas
+
+```bash
+go vet ./...
+go test ./...
+```
+
+`cmd/file-collector/e2e_test.go` compila el binario y corre `write` como lo hace el timer, contra archivos en un directorio temporal y un PostgreSQL real, y revisa las filas. Cubre tres casos tomados de configs de produccion:
+
+- radiometria (`growing_file`, cabecera TOA5, `NAN` del logger, ultima linea incompleta, reanudacion desde el estado y metricas de Prometheus);
+- PVStand (`last_n_files`, timestamp de dos columnas, `on_conflict: do_nothing` sin reescribir filas);
+- WebdynSun (`.csv.gz`, direccion y tipo de inversor por bloque).
+
+Se omiten si `FILE_COLLECTOR_E2E_PG` no apunta a un PostgreSQL:
+
+```bash
+docker run -d --rm --name fc-e2e-pg -e POSTGRES_PASSWORD=e2e -p 127.0.0.1:55433:5432 postgres:17.9
+FILE_COLLECTOR_E2E_PG=postgres://postgres:e2e@127.0.0.1:55433/postgres go test ./cmd/file-collector
+docker stop fc-e2e-pg
+```
+
+El CI levanta PostgreSQL como servicio y publica la cobertura combinada (pruebas y binario) en el resumen del job.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
