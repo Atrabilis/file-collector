@@ -28,9 +28,9 @@ func TestReadXMLFileSummaryParsesAttributes(t *testing.T) {
 	}
 
 	summary, err := ReadTypedFileSummary(path, 1, TypedReadOptions{
-		FileType:          "xml",
-		TimestampColumn:   "ts",
-		TimestampLayouts:  []string{"2006-01-02T15:04:05"},
+		FileType:         "xml",
+		TimestampColumn:  "ts",
+		TimestampLayouts: []string{"2006-01-02T15:04:05"},
 		XMLFields: []XMLFieldSpec{
 			{Name: "name", Path: "Curve.Name", Type: ColumnTypeString},
 			{Name: "temp_1_value", Path: "Curve.Temp1.Value", Type: ColumnTypeFloat64},

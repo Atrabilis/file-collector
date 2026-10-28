@@ -11,19 +11,19 @@ import (
 )
 
 type webdynsunState struct {
-	addr     int64
-	hasAddr  bool
-	typeInv  string
-	hasType  bool
+	addr    int64
+	hasAddr bool
+	typeInv string
+	hasType bool
 }
 
 func readWebdynsunFileSummary(path string, previewRows int, opts TypedReadOptions) (*TypedFileSummary, error) {
 	summary := &TypedFileSummary{
-		Delimiter:          opts.Delimiter,
-		Header:             append([]string(nil), opts.HeaderColumns...),
-		MalformedRows:      make([]MalformedRow, 0, max(0, previewRows)),
-		ParseErrors:        make([]ParseError, 0, max(0, previewRows)),
-		PreviewRows:        make([]TypedRow, 0, max(0, previewRows)),
+		Delimiter:     opts.Delimiter,
+		Header:        append([]string(nil), opts.HeaderColumns...),
+		MalformedRows: make([]MalformedRow, 0, max(0, previewRows)),
+		ParseErrors:   make([]ParseError, 0, max(0, previewRows)),
+		PreviewRows:   make([]TypedRow, 0, max(0, previewRows)),
 	}
 	err := forEachWebdynsunRowInternal(path, opts, func(row TypedRow) error {
 		summary.RowCount++
@@ -52,7 +52,7 @@ func forEachWebdynsunRowInternal(path string, opts TypedReadOptions, fn func(Typ
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	header := append([]string(nil), opts.HeaderColumns...)
 	delimiter := opts.Delimiter

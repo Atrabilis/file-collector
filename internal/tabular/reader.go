@@ -10,13 +10,13 @@ import (
 const maxScanCapacity = 1024 * 1024
 
 type FileSummary struct {
-	Delimiter         rune
-	Header            []string
-	RowCount          int
+	Delimiter          rune
+	Header             []string
+	RowCount           int
 	WellFormedRowCount int
-	MalformedRowCount int
-	MalformedRows     []MalformedRow
-	PreviewRows       [][]string
+	MalformedRowCount  int
+	MalformedRows      []MalformedRow
+	PreviewRows        [][]string
 }
 
 type MalformedRow struct {
@@ -41,7 +41,7 @@ func ReadFileSummaryWithOptions(path string, previewRows int, opts ReadOptions) 
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 0, 64*1024)

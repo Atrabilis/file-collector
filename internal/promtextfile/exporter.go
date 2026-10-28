@@ -90,7 +90,7 @@ func writeAtomically(path, content string) error {
 		return err
 	}
 	tempPath := tempFile.Name()
-	defer os.Remove(tempPath)
+	defer func() { _ = os.Remove(tempPath) }()
 
 	if _, err := tempFile.WriteString(content); err != nil {
 		_ = tempFile.Close()

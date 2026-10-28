@@ -76,14 +76,14 @@ func TestResolveOutputFailsOnMissingEnvironment(t *testing.T) {
 		Name: "local_timescale",
 		Type: "timescaledb",
 		TimescaleDB: config.TimescaleDBOutputConfig{
-			HostEnv:     "TEST_TS_MISSING",
-			Port:        5432,
-			User:        "collector",
-			Password:    "secret",
-			Database:    "telemetry",
-			Schema:      "ua",
-			Table:       "cdaq_power",
-			SSLMode:     "disable",
+			HostEnv:  "TEST_TS_MISSING",
+			Port:     5432,
+			User:     "collector",
+			Password: "secret",
+			Database: "telemetry",
+			Schema:   "ua",
+			Table:    "cdaq_power",
+			SSLMode:  "disable",
 		},
 	})
 	if err == nil {

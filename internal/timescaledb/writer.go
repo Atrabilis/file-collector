@@ -43,7 +43,7 @@ func WriteInputFiles(ctx context.Context, input config.Input, output config.Outp
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.PingContext(ctx); err != nil {
 		return nil, err
@@ -406,7 +406,7 @@ func loadDestinationColumns(ctx context.Context, db *sql.DB, connCfg *Connection
 	if err != nil {
 		return nil, fmt.Errorf("load destination columns for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	columns := make(map[string]struct{})
 	for rows.Next() {
@@ -444,7 +444,7 @@ func loadPrimaryKeyColumns(ctx context.Context, db *sql.DB, connCfg *ConnectionC
 	if err != nil {
 		return nil, fmt.Errorf("load primary key columns for %s.%s: %w", connCfg.Schema, connCfg.Table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	columns := make([]string, 0)
 	for rows.Next() {
@@ -568,7 +568,7 @@ func buildPrimaryKeySignature(columns []string, values []any, primaryKeyColumns 
 		}
 		b.WriteString(primaryKeyColumn)
 		b.WriteByte('=')
-		b.WriteString(fmt.Sprint(values[idx]))
+		fmt.Fprint(&b, values[idx])
 		b.WriteByte('|')
 	}
 	return b.String(), true

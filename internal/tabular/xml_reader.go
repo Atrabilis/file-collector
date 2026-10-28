@@ -229,7 +229,7 @@ func parseXMLDocument(path string) (*xmlNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	decoder := xml.NewDecoder(file)
 	var root *xmlNode
@@ -383,10 +383,6 @@ func nodeToValue(node *xmlNode) any {
 	}
 
 	return values
-}
-
-func marshalXMLNodes(nodes []*xmlNode) (string, error) {
-	return marshalXMLNodesWithAttr(nodes, "")
 }
 
 func marshalXMLNodesWithAttr(nodes []*xmlNode, attrName string) (string, error) {

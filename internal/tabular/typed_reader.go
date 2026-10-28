@@ -110,7 +110,7 @@ func ReadTypedFileSummary(path string, previewRows int, opts TypedReadOptions) (
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	delimiter := opts.Delimiter
 	if delimiter == 0 {
@@ -262,7 +262,7 @@ func ForEachTypedRow(path string, opts TypedReadOptions, fn func(TypedRow) error
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	header, delimiter, err := resolveHeaderAndDelimiter(file, opts)
 	if err != nil {

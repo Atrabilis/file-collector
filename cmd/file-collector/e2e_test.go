@@ -51,7 +51,7 @@ func setupE2E(t *testing.T) *e2eEnv {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	schema := fmt.Sprintf("e2e_%d", time.Now().UnixNano())
 	mustExec(t, db, "CREATE SCHEMA "+schema)
@@ -164,7 +164,7 @@ func appendFile(t *testing.T, path, content string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestE2EWebdynsunGzip(t *testing.T) {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	configPath := filepath.Join(t.TempDir(), "webdynsun.yml")
 	writeFile(t, configPath, fmt.Sprintf(`inputs:
@@ -416,7 +416,7 @@ func TestE2EWebdynsunGzip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type row struct {
 		addr       int64
 		typ        string
